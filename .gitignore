@@ -1,0 +1,26 @@
+# Build directories
+build/
+**/build/
+.gradle/
+**/.gradle/
+.kotlin/
+**/.kotlin/
+.idea/
+**/.idea/
+
+# Local configuration & environment
+local.properties
+.DS_Store
+
+# Large models, binaries & APKs
+*.gguf
+*.bin
+*.apk
+*.so
+dist/
+
+# Android & Gradle temporary files
+*.iml
+.externalNativeBuild
+.cxx
+captures/
