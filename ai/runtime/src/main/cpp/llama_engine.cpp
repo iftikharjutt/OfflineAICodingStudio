@@ -1,174 +1,136 @@
 #include <jni.h>
 #include <string>
+#include <map>
 #include <vector>
-#include <unordered_map>
-#include <mutex>
-#include <memory>
-#include <cstdlib>
-#include <android/log.h>
+#include <cstring>
+#include <algorithm>
 #include "llama.h"
 
-#define TAG "LlamaEngineNative"
-#define LOGI(...) __android_log_print(ANDROID_LOG_INFO, TAG, __VA_ARGS__)
-#define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, TAG, __VA_ARGS__)
-
-struct LlamaSession {
-    std::string id;
-    std::string model_path;
-    llama_model* model = nullptr;
-    llama_context* ctx = nullptr;
-    int n_ctx = 2048;
-    int n_threads = 4;
-    std::vector<llama_token> tokens;
-    size_t current_pos = 0;
-
-    ~LlamaSession() {
-        if (ctx) {
-            llama_free(ctx);
-            ctx = nullptr;
-        }
-        if (model) {
-            llama_model_free(model);
-            model = nullptr;
-        }
-    }
+struct SessionState {
+    llama_model*   model = nullptr;
+    llama_context* ctx   = nullptr;
+    bool           prompt_evaluated = false;
+    llama_token    pending = -1;
+    llama_pos      n_past  = 0;
+    int            last_batch_n = 0;
 };
+static std::map<std::string, SessionState> g_sessions;
 
-static std::mutex g_sessions_mutex;
-static std::unordered_map<std::string, std::shared_ptr<LlamaSession>> g_sessions;
-static bool g_initialized = false;
+static void batch_clear(llama_batch& b){ b.n_tokens = 0; }
+static void batch_add(llama_batch& b, llama_token t, llama_pos p, bool logits){
+    b.token   [b.n_tokens] = t;
+    b.pos     [b.n_tokens] = p;
+    b.n_seq_id[b.n_tokens] = 1;
+    b.seq_id  [b.n_tokens][0] = 0;
+    b.logits  [b.n_tokens] = logits;
+    b.n_tokens++;
+}
+
+static bool eval_ids(SessionState& st, const std::vector<llama_token>& ids){
+    const int n_batch = 256;
+    llama_batch batch = llama_batch_init(n_batch, 0, 1);
+    size_t i = 0;
+    while (i < ids.size()){
+        batch_clear(batch);
+        size_t end = std::min(ids.size(), i + (size_t)n_batch);
+        for (size_t j = i; j < end; ++j)
+            batch_add(batch, ids[j], st.n_past++, (j == ids.size()-1));
+        st.last_batch_n = batch.n_tokens;
+        if (llama_decode(st.ctx, batch) != 0){ llama_batch_free(batch); return false; }
+        i = end;
+    }
+    llama_batch_free(batch);
+    return true;
+}
+
+static llama_token sample_greedy(SessionState& st){
+    const int n_vocab = llama_n_vocab(st.model);
+    float* logits = llama_get_logits_ith(st.ctx, st.last_batch_n - 1);
+    if (!logits) return -1;
+    int best = 0; float bv = logits[0];
+    for (int i = 1; i < n_vocab; ++i)
+        if (logits[i] > bv){ bv = logits[i]; best = i; }
+    return (llama_token)best;
+}
 
 extern "C" {
 
 JNIEXPORT jboolean JNICALL
-Java_com_offlineai_ai_runtime_LlamaEngineNative_nativeInit(JNIEnv *env, jobject thiz) {
-    std::lock_guard<std::mutex> lock(g_sessions_mutex);
-    if (!g_initialized) {
-        llama_backend_init();
-        g_initialized = true;
-        LOGI("llama_backend_init called successfully");
-    }
+Java_com_offlineai_ai_runtime_LlamaEngineNative_nativeInit(JNIEnv*, jobject){
     return JNI_TRUE;
 }
 
 JNIEXPORT jstring JNICALL
 Java_com_offlineai_ai_runtime_LlamaEngineNative_nativeLoadModel(
-    JNIEnv *env, jobject thiz,
-    jstring model_path, jint context_size, jint threads) {
+        JNIEnv* env, jobject, jstring jpath, jint ctxSize, jint threads){
+    const char* path = env->GetStringUTFChars(jpath, nullptr);
+    llama_backend_init();
+    llama_model_params mp = llama_model_default_params();
+    llama_model* model = llama_load_model_from_file(path, mp);
+    env->ReleaseStringUTFChars(jpath, path);
+    if (!model) return env->NewStringUTF("");
 
-    const char *path = env->GetStringUTFChars(model_path, nullptr);
-    std::string model_path_str(path ? path : "");
-    if (path) env->ReleaseStringUTFChars(model_path, path);
+    llama_context_params cp = llama_context_default_params();
+    cp.n_ctx = ctxSize;
+    cp.n_threads = threads;
+    cp.n_threads_batch = threads;
+    llama_context* ctx = llama_new_context_with_model(model, cp);
+    if (!ctx){ llama_free_model(model); return env->NewStringUTF(""); }
 
-    std::lock_guard<std::mutex> lock(g_sessions_mutex);
-    if (!g_initialized) {
-        llama_backend_init();
-        g_initialized = true;
-    }
-
-    llama_model_params mparams = llama_model_default_params();
-    llama_model* model = llama_model_load_from_file(model_path_str.c_str(), mparams);
-
-    if (!model) {
-        LOGE("Failed to load model from path: %s", model_path_str.c_str());
-        return env->NewStringUTF("");
-    }
-
-    llama_context_params cparams = llama_context_default_params();
-    cparams.n_ctx = context_size > 0 ? context_size : 2048;
-    cparams.n_threads = threads > 0 ? threads : 4;
-
-    llama_context* ctx = llama_new_context_with_model(model, cparams);
-    if (!ctx) {
-        LOGE("Failed to create context for model: %s", model_path_str.c_str());
-        llama_model_free(model);
-        return env->NewStringUTF("");
-    }
-
-    auto session = std::make_shared<LlamaSession>();
-    session->id = "session_" + std::to_string(rand());
-    session->model_path = model_path_str;
-    session->model = model;
-    session->ctx = ctx;
-    session->n_ctx = cparams.n_ctx;
-    session->n_threads = cparams.n_threads;
-
-    g_sessions[session->id] = session;
-    LOGI("Successfully loaded model into session %s", session->id.c_str());
-
-    return env->NewStringUTF(session->id.c_str());
+    SessionState st; st.model = model; st.ctx = ctx;
+    std::string id = "s" + std::to_string(g_sessions.size() + 1);
+    g_sessions[id] = st;
+    return env->NewStringUTF(id.c_str());
 }
 
 JNIEXPORT jboolean JNICALL
 Java_com_offlineai_ai_runtime_LlamaEngineNative_nativeUnloadModel(
-    JNIEnv *env, jobject thiz, jstring session_id) {
-
-    const char *sid = env->GetStringUTFChars(session_id, nullptr);
-    std::string session_id_str(sid ? sid : "");
-    if (sid) env->ReleaseStringUTFChars(session_id, sid);
-
-    std::lock_guard<std::mutex> lock(g_sessions_mutex);
-    auto it = g_sessions.find(session_id_str);
-    if (it != g_sessions.end()) {
-        g_sessions.erase(it);
-        LOGI("Unloaded session %s", session_id_str.c_str());
-        return JNI_TRUE;
-    }
-    return JNI_FALSE;
+        JNIEnv* env, jobject, jstring jid){
+    const char* cid = env->GetStringUTFChars(jid, nullptr);
+    std::string id(cid);
+    env->ReleaseStringUTFChars(jid, cid);
+    auto it = g_sessions.find(id);
+    if (it == g_sessions.end()) return JNI_FALSE;
+    if (it->second.ctx)   llama_free(it->second.ctx);
+    if (it->second.model) llama_free_model(it->second.model);
+    g_sessions.erase(it);
+    return JNI_TRUE;
 }
 
 JNIEXPORT jstring JNICALL
 Java_com_offlineai_ai_runtime_LlamaEngineNative_nativeGenerateToken(
-    JNIEnv *env, jobject thiz, jstring session_id, jstring prompt) {
+        JNIEnv* env, jobject, jstring jid, jstring jprompt){
+    const char* cid = env->GetStringUTFChars(jid, nullptr);
+    std::string id(cid);
+    env->ReleaseStringUTFChars(jid, cid);
+    auto it = g_sessions.find(id);
+    if (it == g_sessions.end()) return env->NewStringUTF("");
+    SessionState& st = it->second;
 
-    const char *sid = env->GetStringUTFChars(session_id, nullptr);
-    std::string session_id_str(sid ? sid : "");
-    if (sid) env->ReleaseStringUTFChars(session_id, sid);
-
-    const char *p = env->GetStringUTFChars(prompt, nullptr);
-    std::string prompt_str(p ? p : "");
-    if (p) env->ReleaseStringUTFChars(prompt, p);
-
-    std::lock_guard<std::mutex> lock(g_sessions_mutex);
-    auto it = g_sessions.find(session_id_str);
-    if (it == g_sessions.end() || !it->second || !it->second->ctx) {
-        return env->NewStringUTF("<EOS>");
+    // 1) evaluate the token we sampled on the previous call
+    if (st.pending >= 0){
+        if (!eval_ids(st, {st.pending})) return env->NewStringUTF("");
+        st.pending = -1;
     }
-
-    auto session = it->second;
-    const llama_vocab* vocab = llama_model_get_vocab(session->model);
-    if (!vocab) {
-        return env->NewStringUTF("<EOS>");
+    // 2) first call only: evaluate the whole prompt
+    if (!st.prompt_evaluated){
+        const char* p = env->GetStringUTFChars(jprompt, nullptr);
+        int n = llama_tokenize(st.model, p, (int)strlen(p), nullptr, 0, true, true);
+        std::vector<llama_token> toks(-n);
+        int got = llama_tokenize(st.model, p, (int)strlen(p), toks.data(), toks.size(), true, true);
+        env->ReleaseStringUTFChars(jprompt, p);
+        toks.resize(got);
+        if (!eval_ids(st, toks)) return env->NewStringUTF("");
+        st.prompt_evaluated = true;
     }
-
-    // Tokenize if session prompt is new
-    if (session->tokens.empty() && !prompt_str.empty()) {
-        int n_tokens = prompt_str.length() + 32;
-        session->tokens.resize(n_tokens);
-        int res = llama_tokenize(vocab, prompt_str.c_str(), prompt_str.length(), session->tokens.data(), n_tokens, true, true);
-        if (res < 0) {
-            session->tokens.resize(-res);
-            res = llama_tokenize(vocab, prompt_str.c_str(), prompt_str.length(), session->tokens.data(), -res, true, true);
-        }
-        if (res > 0) {
-            session->tokens.resize(res);
-        } else {
-            session->tokens.clear();
-        }
-        session->current_pos = 0;
-    }
-
-    if (session->current_pos < session->tokens.size()) {
-        llama_token tok = session->tokens[session->current_pos++];
-        char buf[256];
-        int len = llama_token_to_piece(vocab, tok, buf, sizeof(buf), 0, true);
-        if (len > 0) {
-            std::string piece(buf, len);
-            return env->NewStringUTF(piece.c_str());
-        }
-    }
-
-    return env->NewStringUTF("<EOS>");
+    // 3) sample the next token (greedy)
+    llama_token t = sample_greedy(st);
+    if (t < 0 || llama_token_is_eog(st.model, t)) return env->NewStringUTF("<EOS>");
+    st.pending = t;
+    char buf[256];
+    int len = llama_token_to_piece(st.model, t, buf, sizeof(buf), 0, false);
+    if (len <= 0) return env->NewStringUTF("");
+    return env->NewStringUTF(std::string(buf, len).c_str());
 }
 
-}
+} // extern "C"
