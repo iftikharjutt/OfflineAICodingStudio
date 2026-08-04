@@ -28,7 +28,7 @@ struct LlamaSession {
             ctx = nullptr;
         }
         if (model) {
-            llama_free_model(model);
+            llama_model_free(model);
             model = nullptr;
         }
     }
@@ -56,9 +56,9 @@ Java_com_offlineai_ai_runtime_LlamaEngineNative_nativeLoadModel(
     JNIEnv *env, jobject thiz,
     jstring model_path, jint context_size, jint threads) {
 
-    const char *path = env->GetStringUTF8Chars(model_path, nullptr);
+    const char *path = env->GetStringUTFChars(model_path, nullptr);
     std::string model_path_str(path ? path : "");
-    if (path) env->ReleaseStringUTF8Chars(model_path, path);
+    if (path) env->ReleaseStringUTFChars(model_path, path);
 
     std::lock_guard<std::mutex> lock(g_sessions_mutex);
     if (!g_initialized) {
@@ -67,11 +67,11 @@ Java_com_offlineai_ai_runtime_LlamaEngineNative_nativeLoadModel(
     }
 
     llama_model_params mparams = llama_model_default_params();
-    llama_model* model = llama_load_model_from_file(model_path_str.c_str(), mparams);
+    llama_model* model = llama_model_load_from_file(model_path_str.c_str(), mparams);
 
     if (!model) {
         LOGE("Failed to load model from path: %s", model_path_str.c_str());
-        return env->NewStringUTF8("");
+        return env->NewStringUTF("");
     }
 
     llama_context_params cparams = llama_context_default_params();
@@ -81,8 +81,8 @@ Java_com_offlineai_ai_runtime_LlamaEngineNative_nativeLoadModel(
     llama_context* ctx = llama_new_context_with_model(model, cparams);
     if (!ctx) {
         LOGE("Failed to create context for model: %s", model_path_str.c_str());
-        llama_free_model(model);
-        return env->NewStringUTF8("");
+        llama_model_free(model);
+        return env->NewStringUTF("");
     }
 
     auto session = std::make_shared<LlamaSession>();
@@ -96,16 +96,16 @@ Java_com_offlineai_ai_runtime_LlamaEngineNative_nativeLoadModel(
     g_sessions[session->id] = session;
     LOGI("Successfully loaded model into session %s", session->id.c_str());
 
-    return env->NewStringUTF8(session->id.c_str());
+    return env->NewStringUTF(session->id.c_str());
 }
 
 JNIEXPORT jboolean JNICALL
 Java_com_offlineai_ai_runtime_LlamaEngineNative_nativeUnloadModel(
     JNIEnv *env, jobject thiz, jstring session_id) {
 
-    const char *sid = env->GetStringUTF8Chars(session_id, nullptr);
+    const char *sid = env->GetStringUTFChars(session_id, nullptr);
     std::string session_id_str(sid ? sid : "");
-    if (sid) env->ReleaseStringUTF8Chars(session_id, sid);
+    if (sid) env->ReleaseStringUTFChars(session_id, sid);
 
     std::lock_guard<std::mutex> lock(g_sessions_mutex);
     auto it = g_sessions.find(session_id_str);
@@ -121,24 +121,24 @@ JNIEXPORT jstring JNICALL
 Java_com_offlineai_ai_runtime_LlamaEngineNative_nativeGenerateToken(
     JNIEnv *env, jobject thiz, jstring session_id, jstring prompt) {
 
-    const char *sid = env->GetStringUTF8Chars(session_id, nullptr);
+    const char *sid = env->GetStringUTFChars(session_id, nullptr);
     std::string session_id_str(sid ? sid : "");
-    if (sid) env->ReleaseStringUTF8Chars(session_id, sid);
+    if (sid) env->ReleaseStringUTFChars(session_id, sid);
 
-    const char *p = env->GetStringUTF8Chars(prompt, nullptr);
+    const char *p = env->GetStringUTFChars(prompt, nullptr);
     std::string prompt_str(p ? p : "");
-    if (p) env->ReleaseStringUTF8Chars(prompt, p);
+    if (p) env->ReleaseStringUTFChars(prompt, p);
 
     std::lock_guard<std::mutex> lock(g_sessions_mutex);
     auto it = g_sessions.find(session_id_str);
     if (it == g_sessions.end() || !it->second || !it->second->ctx) {
-        return env->NewStringUTF8("<EOS>");
+        return env->NewStringUTF("<EOS>");
     }
 
     auto session = it->second;
     const llama_vocab* vocab = llama_model_get_vocab(session->model);
     if (!vocab) {
-        return env->NewStringUTF8("<EOS>");
+        return env->NewStringUTF("<EOS>");
     }
 
     // Tokenize if session prompt is new
@@ -164,11 +164,11 @@ Java_com_offlineai_ai_runtime_LlamaEngineNative_nativeGenerateToken(
         int len = llama_token_to_piece(vocab, tok, buf, sizeof(buf), 0, true);
         if (len > 0) {
             std::string piece(buf, len);
-            return env->NewStringUTF8(piece.c_str());
+            return env->NewStringUTF(piece.c_str());
         }
     }
 
-    return env->NewStringUTF8("<EOS>");
+    return env->NewStringUTF("<EOS>");
 }
 
 }
