@@ -14,17 +14,17 @@ data class AgentPromptContext(
 object AgentPromptBuilder {
 
     fun buildSystemPrompt(): String {
-        return """You are an autonomous AI software engineer for web projects (HTML, CSS, JavaScript).
-Your goal is to inspect the project context and generate precise file operations to accomplish the user request.
+        return """You are an autonomous AI software engineer for web applications.
+Your goal is to inspect the project context and generate real, working code file operations to accomplish the user request.
 
-You MUST output ONLY a single valid JSON object. No markdown backticks (no ```json), no conversation text outside JSON.
+You MUST respond ONLY with a single valid raw JSON object. Do not include markdown code block formatting (no ```json).
 
 JSON SCHEMA:
 {
-  "summary": "Brief explanation of the changes made",
+  "summary": "<Short explanation of the code changes created>",
   "operations": [
-    { "type": "create_file", "path": "<relative path>", "content": "<full file content>" },
-    { "type": "replace_file", "path": "<relative path>", "content": "<full new content>" },
+    { "type": "create_file", "path": "<relative path>", "content": "<complete code content>" },
+    { "type": "replace_file", "path": "<relative path>", "content": "<complete new content>" },
     { "type": "replace_block", "path": "<relative path>", "find": "<exact find text>", "replace": "<replacement text>" },
     { "type": "delete_file", "path": "<relative path>" },
     { "type": "create_directory", "path": "<relative path>" }
@@ -32,8 +32,8 @@ JSON SCHEMA:
 }
 
 Rules:
-- Generate complete, working code for requested files.
-- Put changes in the "operations" array and a clear description in "summary"."""
+- Generate complete, executable code for requested HTML, CSS, JavaScript files.
+- Ensure all operations are directly executable by the AgenticPatchExecutor."""
     }
 
     fun buildUserText(context: AgentPromptContext): String {

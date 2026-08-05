@@ -141,15 +141,16 @@ Java_com_offlineai_ai_runtime_LlamaEngineNative_nativeGenerateToken(
         st.n_past = 0;
 
         const char* p = env->GetStringUTFChars(jprompt, nullptr);
-        int n = llama_tokenize(st.model, p, (int)strlen(p), nullptr, 0, true, true);
+        // Use add_special = false because chat template already includes control tokens (<|im_start|>, etc.)
+        int n = llama_tokenize(st.model, p, (int)strlen(p), nullptr, 0, false, true);
         if (n < 0) n = -n;
         std::vector<llama_token> toks(n);
-        int got = llama_tokenize(st.model, p, (int)strlen(p), toks.data(), (int)toks.size(), true, true);
+        int got = llama_tokenize(st.model, p, (int)strlen(p), toks.data(), (int)toks.size(), false, true);
         env->ReleaseStringUTFChars(jprompt, p);
         
         if (got > 0){
             toks.resize(got);
-            LOGI("Tokenized prompt into %d tokens. Starting evaluation...", got);
+            LOGI("Tokenized prompt into %d tokens (add_special=false, parse_special=true). Starting evaluation...", got);
             if (!eval_ids(st, toks)) {
                 LOGE("eval_ids failed for initial prompt tokens");
                 return env->NewStringUTF("");
