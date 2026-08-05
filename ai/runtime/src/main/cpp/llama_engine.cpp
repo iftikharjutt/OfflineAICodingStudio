@@ -18,7 +18,6 @@ struct SessionState {
     llama_token    pending = -1;
     llama_pos      n_past  = 0;
     int            last_batch_n = 0;
-    std::string    last_error;
 };
 static std::map<std::string, SessionState> g_sessions;
 
@@ -33,19 +32,26 @@ static void batch_add(llama_batch& b, llama_token t, llama_pos p, bool logits){
 }
 
 static bool eval_ids(SessionState& st, const std::vector<llama_token>& ids){
+    const uint32_t n_ctx = llama_n_ctx(st.ctx);
     const int n_batch = 256;
     llama_batch batch = llama_batch_init(n_batch, 0, 1);
     size_t i = 0;
     while (i < ids.size()){
+        if ((uint32_t)st.n_past >= n_ctx) {
+            LOGE("Context limit reached: n_past (%d) >= n_ctx (%u)", (int)st.n_past, n_ctx);
+            llama_batch_free(batch);
+            return false;
+        }
+
         batch_clear(batch);
         size_t end = std::min(ids.size(), i + (size_t)n_batch);
-        for (size_t j = i; j < end; ++j)
+        for (size_t j = i; j < end; ++j) {
+            if ((uint32_t)st.n_past >= n_ctx) break;
             batch_add(batch, ids[j], st.n_past++, (j == ids.size()-1));
+        }
         st.last_batch_n = batch.n_tokens;
-        int status = llama_decode(st.ctx, batch);
-        if (status != 0){
-            st.last_error = "[JNI_ERROR: llama_decode failed with code " + std::to_string(status) + " at n_past=" + std::to_string(st.n_past) + "]";
-            LOGE("%s", st.last_error.c_str());
+        if (llama_decode(st.ctx, batch) != 0){
+            LOGE("llama_decode failed at n_past=%d", (int)st.n_past);
             llama_batch_free(batch);
             return false;
         }
@@ -57,19 +63,14 @@ static bool eval_ids(SessionState& st, const std::vector<llama_token>& ids){
 
 static llama_token sample_greedy(SessionState& st){
     const int n_vocab = llama_n_vocab(st.model);
-    float* logits = llama_get_logits(st.ctx);
-    if (!logits && st.last_batch_n > 0) {
-        logits = llama_get_logits_ith(st.ctx, st.last_batch_n - 1);
-    }
+    float* logits = llama_get_logits_ith(st.ctx, st.last_batch_n - 1);
     if (!logits) {
-        st.last_error = "[JNI_ERROR: Failed to retrieve logits from llama_context]";
-        LOGE("%s", st.last_error.c_str());
+        LOGE("Failed to get logits for batch index %d", st.last_batch_n - 1);
         return -1;
     }
     int best = 0; float bv = logits[0];
-    for (int i = 1; i < n_vocab; ++i) {
+    for (int i = 1; i < n_vocab; ++i)
         if (logits[i] > bv){ bv = logits[i]; best = i; }
-    }
     return (llama_token)best;
 }
 
@@ -138,9 +139,8 @@ Java_com_offlineai_ai_runtime_LlamaEngineNative_nativeGenerateToken(
     env->ReleaseStringUTFChars(jid, cid);
     auto it = g_sessions.find(id);
     if (it == g_sessions.end()) {
-        std::string err = "[JNI_ERROR: Session " + id + " not found in native memory]";
-        LOGE("%s", err.c_str());
-        return env->NewStringUTF(err.c_str());
+        LOGE("nativeGenerateToken: Session %s not found", id.c_str());
+        return env->NewStringUTF("");
     }
     SessionState& st = it->second;
 
@@ -148,68 +148,50 @@ Java_com_offlineai_ai_runtime_LlamaEngineNative_nativeGenerateToken(
         st.prompt_evaluated = false;
         st.pending = -1;
         st.n_past = 0;
-        st.last_error.clear();
+
+        // Clear residual KV cache for a clean turn
+        if (st.ctx) {
+            llama_kv_cache_clear(st.ctx);
+        }
 
         const char* p = env->GetStringUTFChars(jprompt, nullptr);
-        
-        // First try with add_special=false, parse_special=true
+        // add_special = false (ChatML formatted), parse_special = true
         int n = llama_tokenize(st.model, p, (int)strlen(p), nullptr, 0, false, true);
         if (n < 0) n = -n;
-        
         std::vector<llama_token> toks(n);
         int got = llama_tokenize(st.model, p, (int)strlen(p), toks.data(), (int)toks.size(), false, true);
-        
-        // Fallback: If 0 tokens returned, try with add_special=true
-        if (got <= 0) {
-            n = llama_tokenize(st.model, p, (int)strlen(p), nullptr, 0, true, true);
-            if (n < 0) n = -n;
-            toks.resize(n);
-            got = llama_tokenize(st.model, p, (int)strlen(p), toks.data(), (int)toks.size(), true, true);
-        }
-        
         env->ReleaseStringUTFChars(jprompt, p);
         
         if (got > 0){
             toks.resize(got);
             LOGI("Tokenized prompt into %d tokens. Starting evaluation...", got);
             if (!eval_ids(st, toks)) {
-                return env->NewStringUTF(st.last_error.c_str());
+                LOGE("eval_ids failed for initial prompt tokens");
+                return env->NewStringUTF("");
             }
             st.prompt_evaluated = true;
         } else {
-            std::string err = "[JNI_ERROR: Tokenizer returned 0 tokens for prompt text]";
-            LOGE("%s", err.c_str());
-            return env->NewStringUTF(err.c_str());
+            LOGE("llama_tokenize returned 0 tokens for prompt");
+            return env->NewStringUTF("");
         }
     } else {
         if (st.pending >= 0){
             if (!eval_ids(st, {st.pending})) {
-                return env->NewStringUTF(st.last_error.c_str());
+                LOGE("eval_ids failed for pending token");
+                return env->NewStringUTF("");
             }
             st.pending = -1;
         }
     }
 
     llama_token t = sample_greedy(st);
-    if (t < 0) {
-        std::string err = st.last_error.empty() ? "[JNI_ERROR: sample_greedy returned -1 token]" : st.last_error;
-        return env->NewStringUTF(err.c_str());
-    }
-
-    bool isEog = llama_token_is_eog(st.model, t);
-    LOGI("Sampled token ID=%d (isEog=%d)", t, isEog);
-
-    if (isEog) {
+    if (t < 0 || llama_token_is_eog(st.model, t)) {
         return env->NewStringUTF("<EOS>");
     }
-
     st.pending = t;
     char buf[256];
     int len = llama_token_to_piece(st.model, t, buf, sizeof(buf), 0, false);
-    if (len <= 0) {
-        // Fallback for special non-printable pieces
-        return env->NewStringUTF("");
-    }
+    if (len <= 0) return env->NewStringUTF("");
     return env->NewStringUTF(std::string(buf, len).c_str());
 }
 

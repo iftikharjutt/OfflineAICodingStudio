@@ -21,7 +21,6 @@ class LlamaEngineNative : LlamaInferenceEngine {
             } catch (e: UnsatisfiedLinkError) {
                 Log.e(TAG, "llama_engine native library not available: ${e.message}", e)
                 nativeAvailable = false
-                DiagnosticsManager.recordError(e)
             }
         }
 
@@ -39,7 +38,6 @@ class LlamaEngineNative : LlamaInferenceEngine {
         if (!nativeAvailable) {
             val err = NativeInferenceException("Native llama_engine library (libllama_engine.so) is not loaded on this device.")
             Log.e(TAG, "loadModel failed: ${err.message}")
-            DiagnosticsManager.recordError(err)
             return Result.failure(err)
         }
 
@@ -47,7 +45,6 @@ class LlamaEngineNative : LlamaInferenceEngine {
         if (!file.exists() || !file.isFile) {
             val err = IllegalArgumentException("GGUF model file does not exist at path: ${request.modelPath}")
             Log.e(TAG, "loadModel failed: ${err.message}")
-            DiagnosticsManager.recordError(err)
             return Result.failure(err)
         }
 
@@ -60,7 +57,6 @@ class LlamaEngineNative : LlamaInferenceEngine {
             if (sessionId.isBlank()) {
                 val err = NativeInferenceException("nativeLoadModel returned empty session ID for model: ${request.modelPath}")
                 Log.e(TAG, "loadModel failed: ${err.message}")
-                DiagnosticsManager.recordError(err)
                 return Result.failure(err)
             }
 
@@ -71,19 +67,10 @@ class LlamaEngineNative : LlamaInferenceEngine {
                 loadedAt = System.currentTimeMillis()
             )
             activeSession = session
-
-            DiagnosticsManager.updateModelStatus(
-                sessionId = sessionId,
-                modelPath = request.modelPath,
-                contextSize = request.contextSize,
-                threadCount = request.threadCount
-            )
-
             Log.i(TAG, "Model loaded successfully: sessionID=$sessionId, loadTime=${loadDuration}ms")
             Result.success(session)
         } catch (e: Exception) {
             Log.e(TAG, "loadModel exception: ${e.message}", e)
-            DiagnosticsManager.recordError(e)
             Result.failure(e)
         }
     }
@@ -94,22 +81,19 @@ class LlamaEngineNative : LlamaInferenceEngine {
                 Log.i(TAG, "Unloading model session: $sessionId")
                 nativeUnloadModel(sessionId)
             } catch (e: Exception) {
-                Log.e(TAG, "Failed to unload model session $sessionId: ${e.message}", e)
-                DiagnosticsManager.recordError(e)
+                Log.e(TAG, "Failed to unload model session $sessionId:${e.message}", e)
             }
         }
         if (activeSession?.sessionId == sessionId) {
             activeSession = null
-            DiagnosticsManager.updateModelStatus(null, null, 0, 0)
         }
     }
 
     override fun streamCompletion(request: CompletionRequest): Flow<TokenEvent> = flow {
         val session = activeSession
         if (session == null) {
-            val err = ModelNotLoadedException("No GGUF model loaded. Please select and load a model in Models Manager tab first.")
+            val err = ModelNotLoadedException("No GGUF model loaded. Please select and load a model first.")
             Log.e(TAG, "streamCompletion failed: ${err.message}")
-            DiagnosticsManager.recordError(err)
             emit(TokenEvent.Error(err))
             return@flow
         }
@@ -117,69 +101,72 @@ class LlamaEngineNative : LlamaInferenceEngine {
         if (!nativeAvailable) {
             val err = NativeInferenceException("Native LLM engine unavailable. llama_engine.so library missing.")
             Log.e(TAG, "streamCompletion failed: ${err.message}")
-            DiagnosticsManager.recordError(err)
             emit(TokenEvent.Error(err))
             return@flow
         }
 
         require(request.prompt.isNotBlank()) { "Completion prompt cannot be blank" }
 
-        val stopTokens = request.stopSequences
+        val stopTokens = request.stopSequences.filter { it.isNotBlank() }
         val startTime = System.currentTimeMillis()
         var generatedCount = 0
-        var firstTokenText: String? = null
 
-        Log.i(TAG, "Starting streamCompletion: session=${session.sessionId}, modelPath=${session.modelPath}, promptLength=${request.prompt.length}, maxTokens=${request.maxTokens}, temp=${request.temperature}")
+        Log.i(TAG, "Starting streamCompletion: session=${session.sessionId}, promptLength=${request.prompt.length}")
 
         try {
             var isComplete = false
             var isFirst = true
-            val accumulated = StringBuilder()
+            val pendingBuffer = StringBuilder()
 
             while (!isComplete) {
-                val token = nativeGenerateToken(session.sessionId, request.prompt, isFirst)
+                val promptArg = if (isFirst) request.prompt else ""
+                val token = nativeGenerateToken(session.sessionId, promptArg, isFirst)
                 isFirst = false
-
-                if (token.startsWith("[JNI_ERROR:")) {
-                    val err = NativeInferenceException("Native C++ Inference Error: $token")
-                    Log.e(TAG, "Native C++ Error: ${err.message}")
-                    DiagnosticsManager.recordError(err)
-                    emit(TokenEvent.Error(err))
-                    return@flow
-                }
 
                 if (token.isEmpty() || token == "<EOS>") {
                     isComplete = true
                 } else {
-                    if (firstTokenText == null) {
-                        firstTokenText = token
-                        Log.i(TAG, "First generated token: '$token'")
-                    }
                     generatedCount++
-                    accumulated.append(token)
-                    val currentStr = accumulated.toString()
+                    pendingBuffer.append(token)
+                    val bufferStr = pendingBuffer.toString()
 
-                    val matchesStop = stopTokens.any { stopSequence ->
-                        stopSequence.isNotBlank() && (token.contains(stopSequence) || currentStr.endsWith(stopSequence))
+                    // Check if entire buffer ends with or contains any stop sequence
+                    val matchedStop = stopTokens.firstOrNull { stop ->
+                        bufferStr.contains(stop) || bufferStr.endsWith(stop)
                     }
 
-                    if (matchesStop) {
+                    if (matchedStop != null) {
                         isComplete = true
+                        // Suppress matched stop token and emit any preceding clean text
+                        val cleanText = bufferStr.substringBefore(matchedStop)
+                        if (cleanText.isNotEmpty()) {
+                            emit(TokenEvent.Token(cleanText))
+                        }
                     } else {
-                        emit(TokenEvent.Token(token))
+                        // Check if buffer ends with a potential prefix of any stop token
+                        val isPotentialPrefix = stopTokens.any { stop ->
+                            (1..stop.length).any { len -> bufferStr.endsWith(stop.take(len)) }
+                        }
+
+                        if (!isPotentialPrefix) {
+                            emit(TokenEvent.Token(bufferStr))
+                            pendingBuffer.clear()
+                        }
                     }
                 }
                 kotlinx.coroutines.yield()
             }
 
+            // Flush remaining clean tokens if generation stopped normally
+            if (pendingBuffer.isNotEmpty() && stopTokens.none { pendingBuffer.contains(it) }) {
+                emit(TokenEvent.Token(pendingBuffer.toString()))
+            }
+
             val elapsed = System.currentTimeMillis() - startTime
-            Log.i(TAG, "streamCompletion finished: generatedTokens=$generatedCount, elapsed=${elapsed}ms, avgSpeed=${if (elapsed > 0) (generatedCount * 1000L / elapsed) else 0} t/s")
+            Log.i(TAG, "streamCompletion finished: generatedTokens=$generatedCount, elapsed=${elapsed}ms")
 
             if (generatedCount == 0) {
-                val err = IllegalStateException("Inference failed: Zero tokens generated by GGUF model.")
-                Log.w(TAG, err.message ?: "Zero tokens generated")
-                DiagnosticsManager.recordError(err)
-                emit(TokenEvent.Error(err))
+                emit(TokenEvent.Error(IllegalStateException("Inference failed: Zero tokens generated by GGUF model.")))
             } else {
                 emit(TokenEvent.Completed)
             }
@@ -189,7 +176,6 @@ class LlamaEngineNative : LlamaInferenceEngine {
             emit(TokenEvent.Cancelled)
         } catch (e: Exception) {
             Log.e(TAG, "streamCompletion error: ${e.message}", e)
-            DiagnosticsManager.recordError(e)
             emit(TokenEvent.Error(e))
         }
     }.flowOn(Dispatchers.IO)
