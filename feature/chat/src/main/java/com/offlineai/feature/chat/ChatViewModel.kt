@@ -50,6 +50,8 @@ class ChatViewModel(
     private val _isGenerating = MutableStateFlow(false)
     val isGenerating: StateFlow<Boolean> = _isGenerating.asStateFlow()
 
+    var activeSessionModelPath: String? = null
+
     fun setMode(mode: AssistantMode) {
         _activeMode.value = mode
     }
@@ -62,6 +64,9 @@ class ChatViewModel(
 
     fun sendMessage(userText: String, activeProjectDir: File?, modelPath: String? = null) {
         require(userText.isNotBlank()) { "User request text cannot be blank" }
+
+        // Resolve modelPath to ensure fallback to activeSessionModelPath if parameter is null
+        val effectiveModelPath = modelPath ?: activeSessionModelPath
 
         val currentMode = _activeMode.value
         val userMsg = ChatMessage(sender = "user", text = userText, mode = currentMode)
@@ -87,7 +92,7 @@ class ChatViewModel(
                     val chatContext = ChatPromptContext(
                         conversationHistory = conversationManager.getHistoryPairs(),
                         userRequest = userText,
-                        modelPath = modelPath
+                        modelPath = effectiveModelPath
                     )
                     ChatPromptBuilder.buildPrompt(chatContext)
                 } else {
@@ -108,15 +113,15 @@ class ChatViewModel(
                         activeFileContent = activeContent,
                         conversationHistory = conversationManager.getHistoryPairs(),
                         userRequest = userText,
-                        modelPath = modelPath
+                        modelPath = effectiveModelPath
                     )
                     AgentPromptBuilder.buildPrompt(agentContext)
                 }
 
-                val family = ModelTemplateDetector.detectFamily(modelPath)
+                val family = ModelTemplateDetector.detectFamily(effectiveModelPath)
                 val stopTokens = ModelTemplateDetector.getStopTokens(family)
 
-                Log.i("ChatViewModel", "Starting inference: mode=$currentMode, family=$family, modelPath=$modelPath, promptLen=${fullPrompt.length}")
+                Log.i("ChatViewModel", "Starting inference: mode=$currentMode, family=$family, effectiveModelPath=$effectiveModelPath, promptLen=${fullPrompt.length}")
 
                 val startTime = System.currentTimeMillis()
 
@@ -127,7 +132,7 @@ class ChatViewModel(
                         maxTokens = 2048,
                         temperature = if (currentMode == AssistantMode.CHAT) 0.7f else 0.2f,
                         stopSequences = stopTokens,
-                        modelPath = modelPath
+                        modelPath = effectiveModelPath
                     )
                 ).collect { event ->
                     when (event) {
