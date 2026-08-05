@@ -2,6 +2,9 @@ package com.offlineai.ai.runtime
 
 import kotlinx.coroutines.flow.Flow
 
+class NativeInferenceException(message: String, cause: Throwable? = null) : Exception(message, cause)
+class ModelNotLoadedException(message: String = "No GGUF model loaded in session.") : Exception(message)
+
 data class ModelLoadRequest(
     val modelPath: String,
     val contextSize: Int = 4096,
@@ -24,7 +27,8 @@ data class CompletionRequest(
     val topK: Int = 40,
     val topP: Float = 0.95f,
     val repeatPenalty: Float = 1.1f,
-    val stopSequences: List<String> = emptyList()
+    val stopSequences: List<String> = emptyList(),
+    val modelPath: String? = null
 )
 
 sealed interface TokenEvent {

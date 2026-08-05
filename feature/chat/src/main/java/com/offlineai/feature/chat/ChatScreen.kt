@@ -1,17 +1,22 @@
 package com.offlineai.feature.chat
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.offlineai.ai.prompting.ParsedAiResponse
+import com.offlineai.core.models.AssistantMode
 import com.offlineai.core.models.FileOperation
 import java.io.File
 
@@ -24,10 +29,77 @@ fun ChatScreen(
 ) {
     val messages by viewModel.messages.collectAsState()
     val isGenerating by viewModel.isGenerating.collectAsState()
+    val activeMode by viewModel.activeMode.collectAsState()
 
     var inputText by remember { mutableStateOf("") }
 
     Column(modifier = modifier.fillMaxSize()) {
+        // Mode Selector Bar (Chat Mode vs Agent Mode Toggle)
+        Surface(
+            color = MaterialTheme.colorScheme.surfaceVariant,
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 12.dp, vertical = 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        text = "Mode:",
+                        style = MaterialTheme.typography.labelLarge,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Spacer(Modifier.width(8.dp))
+                    FilterChip(
+                        selected = activeMode == AssistantMode.CHAT,
+                        onClick = { viewModel.setMode(AssistantMode.CHAT) },
+                        label = { Text("Chat Mode") },
+                        leadingIcon = {
+                            Icon(
+                                Icons.Default.ChatBubble,
+                                contentDescription = null,
+                                tint = Color(0xFF2196F3)
+                            )
+                        },
+                        colors = FilterChipDefaults.filterChipColors(
+                            selectedContainerColor = Color(0xFF2196F3).copy(alpha = 0.2f),
+                            selectedLabelColor = Color(0xFF2196F3)
+                        )
+                    )
+                    Spacer(Modifier.width(8.dp))
+                    FilterChip(
+                        selected = activeMode == AssistantMode.AGENT,
+                        onClick = { viewModel.setMode(AssistantMode.AGENT) },
+                        label = { Text("Agent Mode") },
+                        leadingIcon = {
+                            Icon(
+                                Icons.Default.Build,
+                                contentDescription = null,
+                                tint = Color(0xFFFF9800)
+                            )
+                        },
+                        colors = FilterChipDefaults.filterChipColors(
+                            selectedContainerColor = Color(0xFFFF9800).copy(alpha = 0.2f),
+                            selectedLabelColor = Color(0xFFFF9800)
+                        )
+                    )
+                }
+
+                IconButton(onClick = { viewModel.clearHistory() }) {
+                    Icon(
+                        Icons.Default.DeleteSweep,
+                        contentDescription = "Clear Chat",
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+        }
+
+        HorizontalDivider()
+
         // Chat Messages List
         LazyColumn(
             modifier = Modifier
@@ -68,7 +140,14 @@ fun ChatScreen(
                 OutlinedTextField(
                     value = inputText,
                     onValueChange = { inputText = it },
-                    placeholder = { Text("Ask AI to build or modify code...") },
+                    placeholder = {
+                        Text(
+                            if (activeMode == AssistantMode.CHAT)
+                                "Ask AI a question or request guidance..."
+                            else
+                                "Ask Agent to build, edit, or refactor code..."
+                        )
+                    },
                     modifier = Modifier.weight(1f),
                     singleLine = false,
                     maxLines = 3
@@ -84,9 +163,11 @@ fun ChatScreen(
                     enabled = !isGenerating && inputText.isNotBlank()
                 ) {
                     Icon(
-                        imageVector = Icons.Default.Send,
+                        imageVector = Icons.AutoMirrored.Filled.Send,
                         contentDescription = "Send Prompt",
-                        tint = if (inputText.isNotBlank()) MaterialTheme.colorScheme.primary else Color.Gray
+                        tint = if (inputText.isNotBlank()) {
+                            if (activeMode == AssistantMode.CHAT) Color(0xFF2196F3) else Color(0xFFFF9800)
+                        } else Color.Gray
                     )
                 }
             }
@@ -107,25 +188,51 @@ fun ChatMessageBubble(
     ) {
         Card(
             colors = CardDefaults.cardColors(
-                containerColor = if (isUser) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.secondaryContainer
+                containerColor = if (isUser)
+                    MaterialTheme.colorScheme.primaryContainer
+                else
+                    MaterialTheme.colorScheme.secondaryContainer
             ),
-            modifier = Modifier.widthIn(max = 320.dp)
+            modifier = Modifier.widthIn(max = 340.dp)
         ) {
             Column(modifier = Modifier.padding(12.dp)) {
-                Text(
-                    text = if (isUser) "You" else "AI Assistant",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = if (isUser) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSecondaryContainer
-                )
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text(
+                        text = if (isUser) "You" else "AI Assistant",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = if (isUser) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSecondaryContainer,
+                        fontWeight = FontWeight.Bold
+                    )
+
+                    if (!isUser) {
+                        Surface(
+                            shape = RoundedCornerShape(4.dp),
+                            color = if (message.mode == AssistantMode.CHAT) Color(0xFF2196F3) else Color(0xFFFF9800),
+                            modifier = Modifier.padding(start = 4.dp)
+                        ) {
+                            Text(
+                                text = if (message.mode == AssistantMode.CHAT) "CHAT" else "AGENT",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = Color.White,
+                                modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp)
+                            )
+                        }
+                    }
+                }
+
                 Spacer(Modifier.height(4.dp))
                 Text(
-                    text = message.text,
+                    text = message.text.ifBlank { "..." },
                     style = MaterialTheme.typography.bodyMedium
                 )
 
-                // Show AI Generated Code Operations Patch Card
+                // Show AI Generated Code Operations Patch Card (ONLY in AGENT mode when patch exists)
                 val patch: ParsedAiResponse? = message.parsedPatch
-                if (patch != null) {
+                if (patch != null && message.mode == AssistantMode.AGENT) {
                     Spacer(Modifier.height(8.dp))
                     Card(
                         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
@@ -133,8 +240,9 @@ fun ChatMessageBubble(
                     ) {
                         Column(modifier = Modifier.padding(8.dp)) {
                             Text(
-                                text = "Generated File Operations (${patch.operations.size})",
-                                style = MaterialTheme.typography.labelMedium
+                                text = "Generated Operations (${patch.operations.size})",
+                                style = MaterialTheme.typography.labelMedium,
+                                fontWeight = FontWeight.Bold
                             )
                             Spacer(Modifier.height(4.dp))
 
@@ -143,7 +251,7 @@ fun ChatMessageBubble(
                                 Text(
                                     text = "• $desc",
                                     style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.primary
+                                    color = Color(0xFFFF9800)
                                 )
                             }
 
@@ -164,7 +272,7 @@ fun ChatMessageBubble(
                                 Button(
                                     onClick = onApplyPatch,
                                     modifier = Modifier.fillMaxWidth(),
-                                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary)
+                                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFFF9800))
                                 ) {
                                     Icon(Icons.Default.Build, contentDescription = null, modifier = Modifier.size(16.dp))
                                     Spacer(Modifier.width(4.dp))

@@ -99,7 +99,7 @@ Java_com_offlineai_ai_runtime_LlamaEngineNative_nativeUnloadModel(
 
 JNIEXPORT jstring JNICALL
 Java_com_offlineai_ai_runtime_LlamaEngineNative_nativeGenerateToken(
-        JNIEnv* env, jobject, jstring jid, jstring jprompt){
+        JNIEnv* env, jobject, jstring jid, jstring jprompt, jboolean isFirstToken){
     const char* cid = env->GetStringUTFChars(jid, nullptr);
     std::string id(cid);
     env->ReleaseStringUTFChars(jid, cid);
@@ -107,23 +107,31 @@ Java_com_offlineai_ai_runtime_LlamaEngineNative_nativeGenerateToken(
     if (it == g_sessions.end()) return env->NewStringUTF("");
     SessionState& st = it->second;
 
-    // 1) evaluate the token we sampled on the previous call
-    if (st.pending >= 0){
-        if (!eval_ids(st, {st.pending})) return env->NewStringUTF("");
+    if (isFirstToken){
+        st.prompt_evaluated = false;
         st.pending = -1;
-    }
-    // 2) first call only: evaluate the whole prompt
-    if (!st.prompt_evaluated){
+        st.n_past = 0;
+
         const char* p = env->GetStringUTFChars(jprompt, nullptr);
         int n = llama_tokenize(st.model, p, (int)strlen(p), nullptr, 0, true, true);
-        std::vector<llama_token> toks(-n);
-        int got = llama_tokenize(st.model, p, (int)strlen(p), toks.data(), toks.size(), true, true);
+        if (n < 0) n = -n;
+        std::vector<llama_token> toks(n);
+        int got = llama_tokenize(st.model, p, (int)strlen(p), toks.data(), (int)toks.size(), true, true);
         env->ReleaseStringUTFChars(jprompt, p);
-        toks.resize(got);
-        if (!eval_ids(st, toks)) return env->NewStringUTF("");
-        st.prompt_evaluated = true;
+        if (got > 0){
+            toks.resize(got);
+            if (!eval_ids(st, toks)) return env->NewStringUTF("");
+            st.prompt_evaluated = true;
+        } else {
+            return env->NewStringUTF("");
+        }
+    } else {
+        if (st.pending >= 0){
+            if (!eval_ids(st, {st.pending})) return env->NewStringUTF("");
+            st.pending = -1;
+        }
     }
-    // 3) sample the next token (greedy)
+
     llama_token t = sample_greedy(st);
     if (t < 0 || llama_token_is_eog(st.model, t)) return env->NewStringUTF("<EOS>");
     st.pending = t;

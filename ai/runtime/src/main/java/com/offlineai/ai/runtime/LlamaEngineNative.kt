@@ -28,16 +28,23 @@ class LlamaEngineNative : LlamaInferenceEngine {
     private external fun nativeInit(): Boolean
     private external fun nativeLoadModel(modelPath: String, contextSize: Int, threads: Int): String
     private external fun nativeUnloadModel(sessionId: String): Boolean
-    private external fun nativeGenerateToken(sessionId: String, prompt: String): String
+    private external fun nativeGenerateToken(sessionId: String, prompt: String, isFirstToken: Boolean): String
 
     private var activeSession: ModelSession? = null
 
     override suspend fun loadModel(request: ModelLoadRequest): Result<ModelSession> {
+        if (!nativeAvailable) {
+            return Result.failure(
+                NativeInferenceException("Native llama_engine library is not loaded on this device.")
+            )
+        }
+
         return try {
-            val sessionId = if (nativeAvailable) {
-                nativeLoadModel(request.modelPath, request.contextSize, request.threadCount)
-            } else {
-                java.util.UUID.randomUUID().toString()
+            val sessionId = nativeLoadModel(request.modelPath, request.contextSize, request.threadCount)
+            if (sessionId.isBlank()) {
+                return Result.failure(
+                    NativeInferenceException("Failed to load GGUF model from path: ${request.modelPath}")
+                )
             }
 
             val session = ModelSession(
@@ -69,34 +76,47 @@ class LlamaEngineNative : LlamaInferenceEngine {
     override fun streamCompletion(request: CompletionRequest): Flow<TokenEvent> = flow {
         val session = activeSession
         if (session == null) {
-            emit(TokenEvent.Error(IllegalStateException("No GGUF model loaded")))
+            emit(TokenEvent.Error(ModelNotLoadedException("No GGUF model loaded. Please select and load a model first.")))
             return@flow
         }
 
+        if (!nativeAvailable) {
+            emit(TokenEvent.Error(NativeInferenceException("Native LLM engine unavailable. llama_engine.so library missing.")))
+            return@flow
+        }
+
+        val stopTokens = request.stopSequences
+
         try {
-            if (nativeAvailable) {
-                var isComplete = false
-                var accumulatedPrompt = request.prompt
-                while (!isComplete) {
-                    val token = nativeGenerateToken(session.sessionId, accumulatedPrompt)
-                    if (token.isEmpty() || token == "<EOS>") {
+            var isComplete = false
+            var isFirst = true
+            val accumulated = StringBuilder()
+
+            while (!isComplete) {
+                val token = nativeGenerateToken(session.sessionId, request.prompt, isFirst)
+                isFirst = false
+
+                if (token.isEmpty() || token == "<EOS>") {
+                    isComplete = true
+                } else {
+                    accumulated.append(token)
+                    val currentStr = accumulated.toString()
+
+                    // Check if token matches any stop sequence
+                    val matchesStop = stopTokens.any { stopSequence ->
+                        stopSequence.isNotBlank() && (token.contains(stopSequence) || currentStr.endsWith(stopSequence))
+                    }
+
+                    if (matchesStop) {
                         isComplete = true
                     } else {
                         emit(TokenEvent.Token(token))
-                        accumulatedPrompt += token
                     }
-                    kotlinx.coroutines.yield()
                 }
-                emit(TokenEvent.Completed)
-            } else {
-                val mockResponse =
-                    """{"summary":"Mock response - native library not loaded","operations":[]}"""
-                for (word in mockResponse.split(" ")) {
-                    kotlinx.coroutines.delay(10)
-                    emit(TokenEvent.Token("$word "))
-                }
-                emit(TokenEvent.Completed)
+                kotlinx.coroutines.yield()
             }
+            emit(TokenEvent.Completed)
+
         } catch (e: kotlinx.coroutines.CancellationException) {
             emit(TokenEvent.Cancelled)
         } catch (e: Exception) {
@@ -105,6 +125,6 @@ class LlamaEngineNative : LlamaInferenceEngine {
     }.flowOn(Dispatchers.IO)
 
     override suspend fun cancel(sessionId: String) {
-        // Native cancellation handled via a flag in the native layer
+        // Native cancellation flag
     }
 }

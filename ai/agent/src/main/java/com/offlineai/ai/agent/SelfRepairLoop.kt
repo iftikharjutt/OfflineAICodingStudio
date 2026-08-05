@@ -1,8 +1,9 @@
 package com.offlineai.ai.agent
 
+import com.offlineai.ai.prompting.AgentPromptBuilder
+import com.offlineai.ai.prompting.AgentPromptContext
 import com.offlineai.ai.prompting.FileOperationParser
-import com.offlineai.ai.prompting.PromptBuilderContext
-import com.offlineai.ai.prompting.StructuredPromptBuilder
+import com.offlineai.ai.prompting.ModelTemplateDetector
 import com.offlineai.ai.runtime.CompletionRequest
 import com.offlineai.ai.runtime.LlamaInferenceEngine
 import com.offlineai.ai.runtime.TokenEvent
@@ -37,7 +38,8 @@ class SelfRepairLoop(
     suspend fun attemptAutoRepair(
         projectDir: File,
         errorMessage: String,
-        activeFilePath: String? = null
+        activeFilePath: String? = null,
+        modelPath: String? = null
     ): Result<List<String>> = withContext(Dispatchers.IO) {
         if (_repairHistory.value.size >= maxAttempts) {
             return@withContext Result.failure(
@@ -54,18 +56,19 @@ class SelfRepairLoop(
                 workspaceManager.readFileText(projectDir, it)
             }
 
-            val context = PromptBuilderContext(
+            val agentContext = AgentPromptContext(
                 projectSummary = projectDir.name,
                 fileTree = fileTree,
                 activeFile = activeFilePath,
                 activeFileContent = activeContent,
                 recentErrors = listOf(errorMessage),
-                userRequest = "Fix the following runtime error: $errorMessage"
+                userRequest = "Fix the following runtime error: $errorMessage",
+                modelPath = modelPath
             )
 
-            val systemPrompt = StructuredPromptBuilder.buildSystemPrompt()
-            val userPrompt = StructuredPromptBuilder.buildUserPrompt(context)
-            val fullPrompt = "$systemPrompt\n\n$userPrompt"
+            val fullPrompt = AgentPromptBuilder.buildPrompt(agentContext)
+            val family = ModelTemplateDetector.detectFamily(modelPath)
+            val stopTokens = ModelTemplateDetector.getStopTokens(family)
 
             val responseBuilder = StringBuilder()
 
@@ -74,7 +77,9 @@ class SelfRepairLoop(
                     sessionId = "repair-session-$attemptNum",
                     prompt = fullPrompt,
                     maxTokens = 2048,
-                    temperature = 0.2f
+                    temperature = 0.2f,
+                    stopSequences = stopTokens,
+                    modelPath = modelPath
                 )
             ).collect { event ->
                 when (event) {
