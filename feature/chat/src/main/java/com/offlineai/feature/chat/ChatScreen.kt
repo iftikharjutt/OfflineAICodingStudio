@@ -1,9 +1,12 @@
 package com.offlineai.feature.chat
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.*
@@ -12,9 +15,14 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import com.offlineai.ai.prompting.ParsedAiResponse
+import com.offlineai.ai.runtime.DiagnosticsManager
 import com.offlineai.core.models.AssistantMode
 import com.offlineai.core.models.FileOperation
 import java.io.File
@@ -32,9 +40,13 @@ fun ChatScreen(
     val activeMode by viewModel.activeMode.collectAsState()
 
     var inputText by remember { mutableStateOf("") }
+    var showDiagnosticsDialog by remember { mutableStateOf(false) }
+
+    val clipboardManager = LocalClipboardManager.current
+    val diagnosticReport by DiagnosticsManager.currentReport.collectAsState()
 
     Column(modifier = modifier.fillMaxSize()) {
-        // Mode Selector Bar (Chat Mode vs Agent Mode Toggle)
+        // Mode Selector Bar & Diagnostics Button
         Surface(
             color = MaterialTheme.colorScheme.surfaceVariant,
             modifier = Modifier.fillMaxWidth()
@@ -42,7 +54,7 @@ fun ChatScreen(
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 12.dp, vertical = 8.dp),
+                    .padding(horizontal = 12.dp, vertical = 6.dp),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.SpaceBetween
             ) {
@@ -69,7 +81,7 @@ fun ChatScreen(
                             selectedLabelColor = Color(0xFF2196F3)
                         )
                     )
-                    Spacer(Modifier.width(8.dp))
+                    Spacer(Modifier.width(6.dp))
                     FilterChip(
                         selected = activeMode == AssistantMode.AGENT,
                         onClick = { viewModel.setMode(AssistantMode.AGENT) },
@@ -88,11 +100,46 @@ fun ChatScreen(
                     )
                 }
 
-                IconButton(onClick = { viewModel.clearHistory() }) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    IconButton(onClick = { showDiagnosticsDialog = true }) {
+                        Icon(
+                            imageVector = if (diagnosticReport.lastErrorMessage != null) Icons.Default.Warning else Icons.Default.Info,
+                            contentDescription = "Diagnostics Report",
+                            tint = if (diagnosticReport.lastErrorMessage != null) Color.Red else MaterialTheme.colorScheme.primary
+                        )
+                    }
+                    IconButton(onClick = { viewModel.clearHistory() }) {
+                        Icon(
+                            Icons.Default.DeleteSweep,
+                            contentDescription = "Clear Chat",
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+            }
+        }
+
+        // Warning Banner if No Model File Selected
+        if (selectedModelPath == null) {
+            Surface(
+                color = Color(0xFFFFF3CD),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Row(
+                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
                     Icon(
-                        Icons.Default.DeleteSweep,
-                        contentDescription = "Clear Chat",
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant
+                        Icons.Default.Warning,
+                        contentDescription = null,
+                        tint = Color(0xFF856404),
+                        modifier = Modifier.size(20.dp)
+                    )
+                    Spacer(Modifier.width(8.dp))
+                    Text(
+                        text = "No GGUF Model loaded. Open 'Models' tab to select/load a model.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = Color(0xFF856404)
                     )
                 }
             }
@@ -173,6 +220,53 @@ fun ChatScreen(
             }
         }
     }
+
+    // Diagnostics & Error Report Dialog
+    if (showDiagnosticsDialog) {
+        AlertDialog(
+            onDismissRequest = { showDiagnosticsDialog = false },
+            title = {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(Icons.Default.BugReport, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                    Spacer(Modifier.width(8.dp))
+                    Text("System Diagnostics & Error Report")
+                }
+            },
+            text = {
+                val reportText = DiagnosticsManager.generateFormattedSummary()
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(max = 360.dp)
+                        .verticalScroll(rememberScrollState())
+                ) {
+                    Text(
+                        text = reportText,
+                        fontFamily = FontFamily.Monospace,
+                        fontSize = 11.sp,
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        val reportText = DiagnosticsManager.generateFormattedSummary()
+                        clipboardManager.setText(AnnotatedString(reportText))
+                    }
+                ) {
+                    Icon(Icons.Default.ContentCopy, contentDescription = null, modifier = Modifier.size(16.dp))
+                    Spacer(Modifier.width(4.dp))
+                    Text("Copy Full Report")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showDiagnosticsDialog = false }) {
+                    Text("Close")
+                }
+            }
+        )
+    }
 }
 
 @Composable
@@ -230,7 +324,6 @@ fun ChatMessageBubble(
                     style = MaterialTheme.typography.bodyMedium
                 )
 
-                // Show AI Generated Code Operations Patch Card (ONLY in AGENT mode when patch exists)
                 val patch: ParsedAiResponse? = message.parsedPatch
                 if (patch != null && message.mode == AssistantMode.AGENT) {
                     Spacer(Modifier.height(8.dp))
