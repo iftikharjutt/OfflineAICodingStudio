@@ -195,8 +195,7 @@ fun AppShell(
             when (selectedDestination) {
                 NavigationDestination.Chat -> ChatScreen(
                     viewModel = chatViewModel,
-                    activeProjectDir = activeProject?.let { File(it.path) },
-                    selectedModelPath = selectedModel?.path
+                    activeProjectDir = activeProject?.let { File(it.path) }
                 )
                 NavigationDestination.Projects -> ProjectsScreen(viewModel = projectsViewModel)
                 NavigationDestination.Editor -> EditorScreen(viewModel = editorViewModel)

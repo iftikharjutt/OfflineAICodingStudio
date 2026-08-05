@@ -4,12 +4,7 @@
 #include <vector>
 #include <cstring>
 #include <algorithm>
-#include <android/log.h>
 #include "llama.h"
-
-#define TAG "llama_engine_native_cpp"
-#define LOGI(...) __android_log_print(ANDROID_LOG_INFO, TAG, __VA_ARGS__)
-#define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, TAG, __VA_ARGS__)
 
 struct SessionState {
     llama_model*   model = nullptr;
@@ -41,11 +36,7 @@ static bool eval_ids(SessionState& st, const std::vector<llama_token>& ids){
         for (size_t j = i; j < end; ++j)
             batch_add(batch, ids[j], st.n_past++, (j == ids.size()-1));
         st.last_batch_n = batch.n_tokens;
-        if (llama_decode(st.ctx, batch) != 0){
-            LOGE("llama_decode failed at n_past=%d", (int)st.n_past);
-            llama_batch_free(batch);
-            return false;
-        }
+        if (llama_decode(st.ctx, batch) != 0){ llama_batch_free(batch); return false; }
         i = end;
     }
     llama_batch_free(batch);
@@ -55,10 +46,7 @@ static bool eval_ids(SessionState& st, const std::vector<llama_token>& ids){
 static llama_token sample_greedy(SessionState& st){
     const int n_vocab = llama_n_vocab(st.model);
     float* logits = llama_get_logits_ith(st.ctx, st.last_batch_n - 1);
-    if (!logits) {
-        LOGE("Failed to get logits for batch index %d", st.last_batch_n - 1);
-        return -1;
-    }
+    if (!logits) return -1;
     int best = 0; float bv = logits[0];
     for (int i = 1; i < n_vocab; ++i)
         if (logits[i] > bv){ bv = logits[i]; best = i; }
@@ -69,7 +57,6 @@ extern "C" {
 
 JNIEXPORT jboolean JNICALL
 Java_com_offlineai_ai_runtime_LlamaEngineNative_nativeInit(JNIEnv*, jobject){
-    LOGI("nativeInit called.");
     return JNI_TRUE;
 }
 
@@ -77,33 +64,22 @@ JNIEXPORT jstring JNICALL
 Java_com_offlineai_ai_runtime_LlamaEngineNative_nativeLoadModel(
         JNIEnv* env, jobject, jstring jpath, jint ctxSize, jint threads){
     const char* path = env->GetStringUTFChars(jpath, nullptr);
-    LOGI("nativeLoadModel starting: path=%s, ctxSize=%d, threads=%d", path, ctxSize, threads);
-    
     llama_backend_init();
     llama_model_params mp = llama_model_default_params();
     llama_model* model = llama_load_model_from_file(path, mp);
     env->ReleaseStringUTFChars(jpath, path);
-    
-    if (!model){
-        LOGE("llama_load_model_from_file returned null for path: %s", path);
-        return env->NewStringUTF("");
-    }
+    if (!model) return env->NewStringUTF("");
 
     llama_context_params cp = llama_context_default_params();
     cp.n_ctx = ctxSize;
     cp.n_threads = threads;
     cp.n_threads_batch = threads;
     llama_context* ctx = llama_new_context_with_model(model, cp);
-    if (!ctx){
-        LOGE("llama_new_context_with_model failed");
-        llama_free_model(model);
-        return env->NewStringUTF("");
-    }
+    if (!ctx){ llama_free_model(model); return env->NewStringUTF(""); }
 
     SessionState st; st.model = model; st.ctx = ctx;
-    std::string id = "session_" + std::to_string(g_sessions.size() + 1);
+    std::string id = "s" + std::to_string(g_sessions.size() + 1);
     g_sessions[id] = st;
-    LOGI("nativeLoadModel success: assigned sessionID=%s", id.c_str());
     return env->NewStringUTF(id.c_str());
 }
 
@@ -113,7 +89,6 @@ Java_com_offlineai_ai_runtime_LlamaEngineNative_nativeUnloadModel(
     const char* cid = env->GetStringUTFChars(jid, nullptr);
     std::string id(cid);
     env->ReleaseStringUTFChars(jid, cid);
-    LOGI("nativeUnloadModel called for session=%s", id.c_str());
     auto it = g_sessions.find(id);
     if (it == g_sessions.end()) return JNI_FALSE;
     if (it->second.ctx)   llama_free(it->second.ctx);
@@ -129,10 +104,7 @@ Java_com_offlineai_ai_runtime_LlamaEngineNative_nativeGenerateToken(
     std::string id(cid);
     env->ReleaseStringUTFChars(jid, cid);
     auto it = g_sessions.find(id);
-    if (it == g_sessions.end()) {
-        LOGE("nativeGenerateToken: Session %s not found", id.c_str());
-        return env->NewStringUTF("");
-    }
+    if (it == g_sessions.end()) return env->NewStringUTF("");
     SessionState& st = it->second;
 
     if (isFirstToken){
@@ -146,33 +118,22 @@ Java_com_offlineai_ai_runtime_LlamaEngineNative_nativeGenerateToken(
         std::vector<llama_token> toks(n);
         int got = llama_tokenize(st.model, p, (int)strlen(p), toks.data(), (int)toks.size(), true, true);
         env->ReleaseStringUTFChars(jprompt, p);
-        
         if (got > 0){
             toks.resize(got);
-            LOGI("Tokenized prompt into %d tokens. Starting evaluation...", got);
-            if (!eval_ids(st, toks)) {
-                LOGE("eval_ids failed for initial prompt tokens");
-                return env->NewStringUTF("");
-            }
+            if (!eval_ids(st, toks)) return env->NewStringUTF("");
             st.prompt_evaluated = true;
         } else {
-            LOGE("llama_tokenize returned 0 tokens for prompt");
             return env->NewStringUTF("");
         }
     } else {
         if (st.pending >= 0){
-            if (!eval_ids(st, {st.pending})) {
-                LOGE("eval_ids failed for pending token");
-                return env->NewStringUTF("");
-            }
+            if (!eval_ids(st, {st.pending})) return env->NewStringUTF("");
             st.pending = -1;
         }
     }
 
     llama_token t = sample_greedy(st);
-    if (t < 0 || llama_token_is_eog(st.model, t)) {
-        return env->NewStringUTF("<EOS>");
-    }
+    if (t < 0 || llama_token_is_eog(st.model, t)) return env->NewStringUTF("<EOS>");
     st.pending = t;
     char buf[256];
     int len = llama_token_to_piece(st.model, t, buf, sizeof(buf), 0, false);

@@ -1,6 +1,5 @@
 package com.offlineai.feature.chat
 
-import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.offlineai.ai.agent.AgenticPatchExecutor
@@ -44,7 +43,15 @@ class ChatViewModel(
     private val _activeMode = MutableStateFlow(AssistantMode.CHAT)
     val activeMode: StateFlow<AssistantMode> = _activeMode.asStateFlow()
 
-    private val _messages = MutableStateFlow<List<ChatMessage>>(emptyList())
+    private val _messages = MutableStateFlow<List<ChatMessage>>(
+        listOf(
+            ChatMessage(
+                sender = "assistant",
+                text = "Hello! I am your offline AI Coding Assistant. Switch between Chat Mode for natural conversation & guidance, or Agent Mode for autonomous code editing.",
+                mode = AssistantMode.CHAT
+            )
+        )
+    )
     val messages: StateFlow<List<ChatMessage>> = _messages.asStateFlow()
 
     private val _isGenerating = MutableStateFlow(false)
@@ -56,16 +63,21 @@ class ChatViewModel(
 
     fun clearHistory() {
         conversationManager.clear()
-        _messages.value = emptyList()
-        Log.i("ChatViewModel", "Conversation history cleared.")
+        _messages.value = listOf(
+            ChatMessage(
+                sender = "assistant",
+                text = "Conversation history cleared. Ready for a new session!",
+                mode = _activeMode.value
+            )
+        )
     }
 
     fun sendMessage(userText: String, activeProjectDir: File?, modelPath: String? = null) {
-        require(userText.isNotBlank()) { "User request text cannot be blank" }
+        if (userText.isBlank()) return
 
         val currentMode = _activeMode.value
         val userMsg = ChatMessage(sender = "user", text = userText, mode = currentMode)
-
+        
         val assistantMsgId = java.util.UUID.randomUUID().toString()
         val assistantPlaceholder = ChatMessage(
             id = assistantMsgId,
@@ -79,7 +91,6 @@ class ChatViewModel(
 
         viewModelScope.launch {
             val responseBuilder = StringBuilder()
-            var tokenCount = 0
             var generationFailed = false
 
             try {
@@ -116,10 +127,6 @@ class ChatViewModel(
                 val family = ModelTemplateDetector.detectFamily(modelPath)
                 val stopTokens = ModelTemplateDetector.getStopTokens(family)
 
-                Log.i("ChatViewModel", "Starting inference: mode=$currentMode, family=$family, modelPath=$modelPath, promptLen=${fullPrompt.length}")
-
-                val startTime = System.currentTimeMillis()
-
                 inferenceEngine.streamCompletion(
                     CompletionRequest(
                         sessionId = "chat-session",
@@ -132,24 +139,18 @@ class ChatViewModel(
                 ).collect { event ->
                     when (event) {
                         is TokenEvent.Token -> {
-                            tokenCount++
                             responseBuilder.append(event.text)
                             updateAssistantMessageText(assistantMsgId, responseBuilder.toString())
                         }
                         is TokenEvent.Error -> {
-                            Log.e("ChatViewModel", "Inference error: ${event.throwable.message}", event.throwable)
-                            val errorText = "Inference Error: ${event.throwable.message}"
+                            val errorText = "Error: ${event.throwable.message}"
                             updateAssistantMessageText(assistantMsgId, errorText)
                             _isGenerating.value = false
                             generationFailed = true
                             return@collect
                         }
-                        is TokenEvent.Completed -> {
-                            val elapsed = System.currentTimeMillis() - startTime
-                            Log.i("ChatViewModel", "Inference completed: tokens=$tokenCount, elapsed=${elapsed}ms")
-                        }
+                        is TokenEvent.Completed -> {}
                         is TokenEvent.Cancelled -> {
-                            Log.w("ChatViewModel", "Inference cancelled")
                             _isGenerating.value = false
                             generationFailed = true
                             return@collect
@@ -157,21 +158,13 @@ class ChatViewModel(
                     }
                 }
             } catch (e: Exception) {
-                Log.e("ChatViewModel", "Uncaught exception in sendMessage: ${e.message}", e)
-                updateAssistantMessageText(assistantMsgId, "Inference Error: ${e.message}")
+                updateAssistantMessageText(assistantMsgId, "Generation Error: ${e.message}")
                 _isGenerating.value = false
                 return@launch
             }
 
             if (!generationFailed) {
                 val rawResponse = responseBuilder.toString()
-
-                if (tokenCount == 0 || rawResponse.isBlank()) {
-                    Log.e("ChatViewModel", "Inference failed: Zero tokens generated")
-                    updateAssistantMessageText(assistantMsgId, "Inference Failed: Zero tokens generated by GGUF model.")
-                    _isGenerating.value = false
-                    return@launch
-                }
 
                 if (currentMode == AssistantMode.AGENT) {
                     val parseResult = FileOperationParser.parseJsonResponse(rawResponse)
@@ -181,7 +174,7 @@ class ChatViewModel(
                     val summaryText = if (parsedPatch != null && parsedPatch.summary.isNotBlank()) {
                         parsedPatch.summary
                     } else {
-                        rawResponse
+                        "Agent finished patch generation."
                     }
 
                     updateAssistantMessagePatch(assistantMsgId, summaryText, if (hasOps) parsedPatch else null)

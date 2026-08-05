@@ -1,5 +1,6 @@
 package com.offlineai.feature.chat
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -24,7 +25,6 @@ import java.io.File
 fun ChatScreen(
     viewModel: ChatViewModel,
     activeProjectDir: File?,
-    selectedModelPath: String? = null,
     modifier: Modifier = Modifier
 ) {
     val messages by viewModel.messages.collectAsState()
@@ -156,7 +156,7 @@ fun ChatScreen(
                 IconButton(
                     onClick = {
                         if (inputText.isNotBlank()) {
-                            viewModel.sendMessage(inputText, activeProjectDir, selectedModelPath)
+                            viewModel.sendMessage(inputText, activeProjectDir)
                             inputText = ""
                         }
                     },
