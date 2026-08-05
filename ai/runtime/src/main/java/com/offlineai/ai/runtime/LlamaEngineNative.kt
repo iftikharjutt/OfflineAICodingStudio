@@ -140,6 +140,14 @@ class LlamaEngineNative : LlamaInferenceEngine {
                 val token = nativeGenerateToken(session.sessionId, request.prompt, isFirst)
                 isFirst = false
 
+                if (token.startsWith("[JNI_ERROR:")) {
+                    val err = NativeInferenceException("Native C++ Inference Error: $token")
+                    Log.e(TAG, "Native C++ Error: ${err.message}")
+                    DiagnosticsManager.recordError(err)
+                    emit(TokenEvent.Error(err))
+                    return@flow
+                }
+
                 if (token.isEmpty() || token == "<EOS>") {
                     isComplete = true
                 } else {
