@@ -7,7 +7,7 @@ class ModelNotLoadedException(message: String = "No GGUF model loaded in session
 
 data class ModelLoadRequest(
     val modelPath: String,
-    val contextSize: Int = 4096,
+    val contextSize: Int = 2048,
     val threadCount: Int = 4,
     val useMmap: Boolean = true
 )

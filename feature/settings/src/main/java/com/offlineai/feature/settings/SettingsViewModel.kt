@@ -13,7 +13,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 
 data class AppSettings(
-    val contextSize: Int = 4096,
+    val contextSize: Int = 2048,
     val threadCount: Int = 4,
     val isDarkMode: Boolean = true,
     val fontSize: Int = 14,
@@ -39,7 +39,7 @@ class SettingsViewModel(
             viewModelScope.launch {
                 store.data.collect { prefs ->
                     _settings.value = AppSettings(
-                        contextSize = prefs[Keys.CONTEXT_SIZE] ?: 4096,
+                        contextSize = prefs[Keys.CONTEXT_SIZE] ?: 2048,
                         threadCount = prefs[Keys.THREAD_COUNT] ?: 4,
                         isDarkMode = prefs[Keys.DARK_MODE] ?: true,
                         autoSaveOnPreview = prefs[Keys.AUTO_SAVE] ?: true
