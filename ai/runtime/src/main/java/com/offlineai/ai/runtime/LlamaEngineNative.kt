@@ -128,38 +128,23 @@ class LlamaEngineNative : LlamaInferenceEngine {
                 } else {
                     generatedCount++
                     pendingBuffer.append(token)
-                    val bufferStr = pendingBuffer.toString()
+                    val currentStr = pendingBuffer.toString()
 
-                    // Check if entire buffer ends with or contains any stop sequence
-                    val matchedStop = stopTokens.firstOrNull { stop ->
-                        bufferStr.contains(stop) || bufferStr.endsWith(stop)
+                    val matchesStop = stopTokens.any { stopSequence ->
+                        stopSequence.isNotBlank() && (
+                            token == stopSequence ||
+                            token.contains(stopSequence) ||
+                            currentStr.endsWith(stopSequence)
+                        )
                     }
 
-                    if (matchedStop != null) {
+                    if (matchesStop) {
                         isComplete = true
-                        // Suppress matched stop token and emit any preceding clean text
-                        val cleanText = bufferStr.substringBefore(matchedStop)
-                        if (cleanText.isNotEmpty()) {
-                            emit(TokenEvent.Token(cleanText))
-                        }
                     } else {
-                        // Check if buffer ends with a potential prefix of any stop token
-                        val isPotentialPrefix = stopTokens.any { stop ->
-                            (1..stop.length).any { len -> bufferStr.endsWith(stop.take(len)) }
-                        }
-
-                        if (!isPotentialPrefix) {
-                            emit(TokenEvent.Token(bufferStr))
-                            pendingBuffer.clear()
-                        }
+                        emit(TokenEvent.Token(token))
                     }
                 }
                 kotlinx.coroutines.yield()
-            }
-
-            // Flush remaining clean tokens if generation stopped normally
-            if (pendingBuffer.isNotEmpty() && stopTokens.none { pendingBuffer.contains(it) }) {
-                emit(TokenEvent.Token(pendingBuffer.toString()))
             }
 
             val elapsed = System.currentTimeMillis() - startTime
