@@ -196,7 +196,7 @@ Java_com_offlineai_ai_runtime_LlamaEngineNative_nativeGenerateToken(
     }
     st.pending = t;
     char buf[256];
-    int len = llama_token_to_piece(vocab, t, buf, sizeof(buf), 0, false);
+    int len = llama_token_to_piece(vocab, t, buf, sizeof(buf), 0, true);
     if (len <= 0) return env->NewStringUTF("");
     return env->NewStringUTF(std::string(buf, len).c_str());
 }
