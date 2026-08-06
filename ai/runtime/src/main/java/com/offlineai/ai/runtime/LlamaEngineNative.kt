@@ -123,9 +123,9 @@ class LlamaEngineNative : LlamaInferenceEngine {
                 val token = nativeGenerateToken(session.sessionId, promptArg, isFirst)
                 isFirst = false
 
-                if (token.isEmpty() || token == "<EOS>") {
+                if (token == "<EOS>") {
                     isComplete = true
-                } else {
+                } else if (token.isNotEmpty()) {
                     generatedCount++
                     pendingBuffer.append(token)
                     val currentStr = pendingBuffer.toString()

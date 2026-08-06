@@ -178,10 +178,10 @@ Java_com_offlineai_ai_runtime_LlamaEngineNative_nativeGenerateToken(
 
         const struct llama_vocab* vocab = llama_model_get_vocab(st.model);
         const char* p = env->GetStringUTFChars(jprompt, nullptr);
-        int n = llama_tokenize(vocab, p, (int)strlen(p), nullptr, 0, true, true);
+        int n = llama_tokenize(vocab, p, (int)strlen(p), nullptr, 0, false, true);
         if (n < 0) n = -n;
         std::vector<llama_token> toks(n);
-        int got = llama_tokenize(vocab, p, (int)strlen(p), toks.data(), (int)toks.size(), true, true);
+        int got = llama_tokenize(vocab, p, (int)strlen(p), toks.data(), (int)toks.size(), false, true);
         env->ReleaseStringUTFChars(jprompt, p);
         
         if (got > 0){
