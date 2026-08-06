@@ -204,8 +204,9 @@ Java_com_offlineai_ai_runtime_LlamaEngineNative_nativeGenerateToken(
     }
 
     const struct llama_vocab* vocab = llama_model_get_vocab(st.model);
-    llama_token t = sample_with_penalty(st);
+    llama_token t = sample_with_penalty(st, 1.15f);
     if (t < 0 || llama_vocab_is_eog(vocab, t)) {
+        g_last_tokens.clear();
         return env->NewStringUTF("<EOS>");
     }
 
