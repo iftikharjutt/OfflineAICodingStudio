@@ -117,6 +117,7 @@ class LlamaEngineNative : LlamaInferenceEngine {
             val accumulated = StringBuilder()
 
             while (!isComplete) {
+                // Fix: Only pass prompt on first token to avoid JNI string overhead
                 val promptArg = if (isFirst) request.prompt else ""
                 val token = nativeGenerateToken(session.sessionId, promptArg, isFirst)
                 isFirst = false
@@ -128,8 +129,8 @@ class LlamaEngineNative : LlamaInferenceEngine {
                     accumulated.append(token)
                     val currentStr = accumulated.toString()
 
-                    val matchesStop = stopTokens.any { stop ->
-                        token == stop || token.contains(stop) || currentStr.endsWith(stop)
+                    val matchesStop = stopTokens.any { stopSequence ->
+                        stopSequence.isNotBlank() && (token == stopSequence || token.contains(stopSequence) || currentStr.endsWith(stopSequence))
                     }
 
                     if (matchesStop) {
