@@ -62,7 +62,8 @@ static bool eval_ids(SessionState& st, const std::vector<llama_token>& ids){
 }
 
 static llama_token sample_greedy(SessionState& st){
-    const int n_vocab = llama_n_vocab(st.model);
+    const struct llama_vocab* vocab = llama_model_get_vocab(st.model);
+    const int n_vocab = llama_vocab_n_tokens(vocab);
     float* logits = llama_get_logits_ith(st.ctx, st.last_batch_n - 1);
     if (!logits) {
         LOGE("Failed to get logits for batch index %d", st.last_batch_n - 1);
@@ -90,11 +91,11 @@ Java_com_offlineai_ai_runtime_LlamaEngineNative_nativeLoadModel(
     
     llama_backend_init();
     llama_model_params mp = llama_model_default_params();
-    llama_model* model = llama_load_model_from_file(path, mp);
+    llama_model* model = llama_model_load_from_file(path, mp);
     env->ReleaseStringUTFChars(jpath, path);
     
     if (!model){
-        LOGE("llama_load_model_from_file returned null for path: %s", path);
+        LOGE("llama_model_load_from_file returned null for path: %s", path);
         return env->NewStringUTF("");
     }
 
@@ -102,10 +103,10 @@ Java_com_offlineai_ai_runtime_LlamaEngineNative_nativeLoadModel(
     cp.n_ctx = ctxSize;
     cp.n_threads = threads;
     cp.n_threads_batch = threads;
-    llama_context* ctx = llama_new_context_with_model(model, cp);
+    llama_context* ctx = llama_init_from_model(model, cp);
     if (!ctx){
-        LOGE("llama_new_context_with_model failed");
-        llama_free_model(model);
+        LOGE("llama_init_from_model failed");
+        llama_model_free(model);
         return env->NewStringUTF("");
     }
 
@@ -126,7 +127,7 @@ Java_com_offlineai_ai_runtime_LlamaEngineNative_nativeUnloadModel(
     auto it = g_sessions.find(id);
     if (it == g_sessions.end()) return JNI_FALSE;
     if (it->second.ctx)   llama_free(it->second.ctx);
-    if (it->second.model) llama_free_model(it->second.model);
+    if (it->second.model) llama_model_free(it->second.model);
     g_sessions.erase(it);
     return JNI_TRUE;
 }
@@ -149,17 +150,21 @@ Java_com_offlineai_ai_runtime_LlamaEngineNative_nativeGenerateToken(
         st.pending = -1;
         st.n_past = 0;
 
-        // Clear residual KV cache for a clean turn
+        // Clear residual memory / KV cache for a clean turn
         if (st.ctx) {
-            llama_kv_cache_clear(st.ctx);
+            llama_memory_t mem = llama_get_memory(st.ctx);
+            if (mem) {
+                llama_memory_clear(mem, true);
+            }
         }
 
+        const struct llama_vocab* vocab = llama_model_get_vocab(st.model);
         const char* p = env->GetStringUTFChars(jprompt, nullptr);
         // add_special = false (ChatML formatted), parse_special = true
-        int n = llama_tokenize(st.model, p, (int)strlen(p), nullptr, 0, false, true);
+        int n = llama_tokenize(vocab, p, (int)strlen(p), nullptr, 0, false, true);
         if (n < 0) n = -n;
         std::vector<llama_token> toks(n);
-        int got = llama_tokenize(st.model, p, (int)strlen(p), toks.data(), (int)toks.size(), false, true);
+        int got = llama_tokenize(vocab, p, (int)strlen(p), toks.data(), (int)toks.size(), false, true);
         env->ReleaseStringUTFChars(jprompt, p);
         
         if (got > 0){
@@ -184,13 +189,14 @@ Java_com_offlineai_ai_runtime_LlamaEngineNative_nativeGenerateToken(
         }
     }
 
+    const struct llama_vocab* vocab = llama_model_get_vocab(st.model);
     llama_token t = sample_greedy(st);
-    if (t < 0 || llama_token_is_eog(st.model, t)) {
+    if (t < 0 || llama_vocab_is_eog(vocab, t)) {
         return env->NewStringUTF("<EOS>");
     }
     st.pending = t;
     char buf[256];
-    int len = llama_token_to_piece(st.model, t, buf, sizeof(buf), 0, false);
+    int len = llama_token_to_piece(vocab, t, buf, sizeof(buf), 0, false);
     if (len <= 0) return env->NewStringUTF("");
     return env->NewStringUTF(std::string(buf, len).c_str());
 }
