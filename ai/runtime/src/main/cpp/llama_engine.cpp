@@ -20,7 +20,6 @@ struct SessionState {
     int            last_batch_n = 0;
 };
 static std::map<std::string, SessionState> g_sessions;
-static std::vector<llama_token> g_last_tokens;
 
 static void batch_clear(llama_batch& b){ b.n_tokens = 0; }
 static void batch_add(llama_batch& b, llama_token t, llama_pos p, bool logits){
@@ -63,7 +62,7 @@ static bool eval_ids(SessionState& st, const std::vector<llama_token>& ids){
     return true;
 }
 
-static llama_token sample_with_penalty(SessionState& st, float repeat_penalty = 1.15f) {
+static llama_token sample_greedy(SessionState& st){
     const struct llama_vocab* vocab = llama_model_get_vocab(st.model);
     const int n_vocab = llama_vocab_n_tokens(vocab);
     float* logits = llama_get_logits_ith(st.ctx, st.last_batch_n - 1);
@@ -71,20 +70,6 @@ static llama_token sample_with_penalty(SessionState& st, float repeat_penalty = 
         LOGE("Failed to get logits for batch index %d", st.last_batch_n - 1);
         return -1;
     }
-
-    if (repeat_penalty > 1.0f && !g_last_tokens.empty()) {
-        for (size_t i = 0; i < g_last_tokens.size(); ++i) {
-            llama_token id = g_last_tokens[i];
-            if (id >= 0 && id < n_vocab) {
-                if (logits[id] <= 0) {
-                    logits[id] *= repeat_penalty;
-                } else {
-                    logits[id] /= repeat_penalty;
-                }
-            }
-        }
-    }
-
     int best = 0; float bv = logits[0];
     for (int i = 1; i < n_vocab; ++i) {
         if (logits[i] > bv) { bv = logits[i]; best = i; }
@@ -166,9 +151,7 @@ Java_com_offlineai_ai_runtime_LlamaEngineNative_nativeGenerateToken(
         st.prompt_evaluated = false;
         st.pending = -1;
         st.n_past = 0;
-        
-        // Reset repetition history & memory/KV cache on new prompt turn
-        g_last_tokens.clear();
+
         if (st.ctx) {
             llama_memory_t mem = llama_get_memory(st.ctx);
             if (mem) {
@@ -207,15 +190,9 @@ Java_com_offlineai_ai_runtime_LlamaEngineNative_nativeGenerateToken(
     }
 
     const struct llama_vocab* vocab = llama_model_get_vocab(st.model);
-    llama_token t = sample_with_penalty(st, 1.15f);
+    llama_token t = sample_greedy(st);
     if (t < 0 || llama_vocab_is_eog(vocab, t)) {
-        g_last_tokens.clear();
         return env->NewStringUTF("<EOS>");
-    }
-
-    g_last_tokens.push_back(t);
-    if (g_last_tokens.size() > 64) {
-        g_last_tokens.erase(g_last_tokens.begin());
     }
 
     st.pending = t;

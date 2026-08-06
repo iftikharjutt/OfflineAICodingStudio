@@ -36,7 +36,7 @@ class LlamaEngineNative : LlamaInferenceEngine {
 
     override suspend fun loadModel(request: ModelLoadRequest): Result<ModelSession> {
         if (!nativeAvailable) {
-            val err = NativeInferenceException("Native llama_engine library (libllama_engine.so) is not loaded on this device.")
+            val err = NativeInferenceException("Native llama_engine library is not loaded on this device.")
             Log.e(TAG, "loadModel failed: ${err.message}")
             return Result.failure(err)
         }
@@ -111,31 +111,25 @@ class LlamaEngineNative : LlamaInferenceEngine {
         val startTime = System.currentTimeMillis()
         var generatedCount = 0
 
-        Log.i(TAG, "Starting streamCompletion: session=${session.sessionId}, promptLength=${request.prompt.length}")
-
         try {
             var isComplete = false
             var isFirst = true
-            val pendingBuffer = StringBuilder()
+            val accumulated = StringBuilder()
 
             while (!isComplete) {
                 val promptArg = if (isFirst) request.prompt else ""
                 val token = nativeGenerateToken(session.sessionId, promptArg, isFirst)
                 isFirst = false
 
-                if (token == "<EOS>") {
+                if (token.isEmpty() || token == "<EOS>") {
                     isComplete = true
-                } else if (token.isNotEmpty()) {
+                } else {
                     generatedCount++
-                    pendingBuffer.append(token)
-                    val currentStr = pendingBuffer.toString()
+                    accumulated.append(token)
+                    val currentStr = accumulated.toString()
 
-                    val matchesStop = stopTokens.any { stopSequence ->
-                        stopSequence.isNotBlank() && (
-                            token == stopSequence ||
-                            token.contains(stopSequence) ||
-                            currentStr.endsWith(stopSequence)
-                        )
+                    val matchesStop = stopTokens.any { stop ->
+                        token == stop || token.contains(stop) || currentStr.endsWith(stop)
                     }
 
                     if (matchesStop) {
