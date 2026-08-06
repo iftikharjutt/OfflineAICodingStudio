@@ -61,17 +61,30 @@ static bool eval_ids(SessionState& st, const std::vector<llama_token>& ids){
     return true;
 }
 
-static llama_token sample_greedy(SessionState& st){
+static std::vector<llama_token> g_last_tokens;
+
+static llama_token sample_with_penalty(SessionState& st, float repeat_penalty = 1.15f) {
     const struct llama_vocab* vocab = llama_model_get_vocab(st.model);
     const int n_vocab = llama_vocab_n_tokens(vocab);
     float* logits = llama_get_logits_ith(st.ctx, st.last_batch_n - 1);
-    if (!logits) {
-        LOGE("Failed to get logits for batch index %d", st.last_batch_n - 1);
-        return -1;
+    if (!logits) return -1;
+
+    // Apply repetition penalty to last 64 generated tokens
+    for (size_t i = 0; i < g_last_tokens.size(); ++i) {
+        llama_token id = g_last_tokens[i];
+        if (id >= 0 && id < n_vocab) {
+            if (logits[id] <= 0) {
+                logits[id] *= repeat_penalty;
+            } else {
+                logits[id] /= repeat_penalty;
+            }
+        }
     }
+
     int best = 0; float bv = logits[0];
-    for (int i = 1; i < n_vocab; ++i)
-        if (logits[i] > bv){ bv = logits[i]; best = i; }
+    for (int i = 1; i < n_vocab; ++i) {
+        if (logits[i] > bv) { bv = logits[i]; best = i; }
+    }
     return (llama_token)best;
 }
 
@@ -149,6 +162,7 @@ Java_com_offlineai_ai_runtime_LlamaEngineNative_nativeGenerateToken(
         st.prompt_evaluated = false;
         st.pending = -1;
         st.n_past = 0;
+        g_last_tokens.clear();
 
         // Clear residual memory / KV cache for a clean turn
         if (st.ctx) {
@@ -190,10 +204,16 @@ Java_com_offlineai_ai_runtime_LlamaEngineNative_nativeGenerateToken(
     }
 
     const struct llama_vocab* vocab = llama_model_get_vocab(st.model);
-    llama_token t = sample_greedy(st);
+    llama_token t = sample_with_penalty(st);
     if (t < 0 || llama_vocab_is_eog(vocab, t)) {
         return env->NewStringUTF("<EOS>");
     }
+
+    g_last_tokens.push_back(t);
+    if (g_last_tokens.size() > 64) {
+        g_last_tokens.erase(g_last_tokens.begin());
+    }
+
     st.pending = t;
     char buf[256];
     int len = llama_token_to_piece(vocab, t, buf, sizeof(buf), 0, true);
