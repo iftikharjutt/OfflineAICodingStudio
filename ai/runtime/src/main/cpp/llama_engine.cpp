@@ -38,6 +38,7 @@ static bool eval_ids(SessionState& st, const std::vector<llama_token>& ids){
     llama_batch batch = llama_batch_init(n_batch, 0, 1);
     size_t i = 0;
     while (i < ids.size()){
+        // Context limit safety check
         if ((uint32_t)st.n_past >= n_ctx) {
             LOGE("Context limit reached: n_past (%d) >= n_ctx (%u)", (int)st.n_past, n_ctx);
             llama_batch_free(batch);
@@ -152,6 +153,7 @@ Java_com_offlineai_ai_runtime_LlamaEngineNative_nativeGenerateToken(
         st.pending = -1;
         st.n_past = 0;
 
+        // Fix 1: Clear KV cache on new turn
         if (st.ctx) {
             llama_memory_t mem = llama_get_memory(st.ctx);
             if (mem) {
@@ -161,6 +163,7 @@ Java_com_offlineai_ai_runtime_LlamaEngineNative_nativeGenerateToken(
 
         const struct llama_vocab* vocab = llama_model_get_vocab(st.model);
         const char* p = env->GetStringUTFChars(jprompt, nullptr);
+        // Fix 2: add_special = false, parse_special = true
         int n = llama_tokenize(vocab, p, (int)strlen(p), nullptr, 0, false, true);
         if (n < 0) n = -n;
         std::vector<llama_token> toks(n);
@@ -197,6 +200,7 @@ Java_com_offlineai_ai_runtime_LlamaEngineNative_nativeGenerateToken(
 
     st.pending = t;
     char buf[256];
+    // Fix 3: special = true so stop tokens pass to Kotlin
     int len = llama_token_to_piece(vocab, t, buf, sizeof(buf), 0, true);
     if (len <= 0) return env->NewStringUTF("");
     return env->NewStringUTF(std::string(buf, len).c_str());
