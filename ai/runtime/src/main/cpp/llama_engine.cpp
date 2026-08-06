@@ -20,6 +20,7 @@ struct SessionState {
     int            last_batch_n = 0;
 };
 static std::map<std::string, SessionState> g_sessions;
+static std::vector<llama_token> g_last_tokens;
 
 static void batch_clear(llama_batch& b){ b.n_tokens = 0; }
 static void batch_add(llama_batch& b, llama_token t, llama_pos p, bool logits){
@@ -32,6 +33,7 @@ static void batch_add(llama_batch& b, llama_token t, llama_pos p, bool logits){
 }
 
 static bool eval_ids(SessionState& st, const std::vector<llama_token>& ids){
+    if (!st.ctx || ids.empty()) return false;
     const uint32_t n_ctx = llama_n_ctx(st.ctx);
     const int n_batch = 256;
     llama_batch batch = llama_batch_init(n_batch, 0, 1);
@@ -47,7 +49,7 @@ static bool eval_ids(SessionState& st, const std::vector<llama_token>& ids){
         size_t end = std::min(ids.size(), i + (size_t)n_batch);
         for (size_t j = i; j < end; ++j) {
             if ((uint32_t)st.n_past >= n_ctx) break;
-            batch_add(batch, ids[j], st.n_past++, (j == ids.size()-1));
+            batch_add(batch, ids[j], st.n_past++, (j == ids.size() - 1));
         }
         st.last_batch_n = batch.n_tokens;
         if (llama_decode(st.ctx, batch) != 0){
@@ -61,22 +63,24 @@ static bool eval_ids(SessionState& st, const std::vector<llama_token>& ids){
     return true;
 }
 
-static std::vector<llama_token> g_last_tokens;
-
 static llama_token sample_with_penalty(SessionState& st, float repeat_penalty = 1.15f) {
     const struct llama_vocab* vocab = llama_model_get_vocab(st.model);
     const int n_vocab = llama_vocab_n_tokens(vocab);
     float* logits = llama_get_logits_ith(st.ctx, st.last_batch_n - 1);
-    if (!logits) return -1;
+    if (!logits) {
+        LOGE("Failed to get logits for batch index %d", st.last_batch_n - 1);
+        return -1;
+    }
 
-    // Apply repetition penalty to last 64 generated tokens
-    for (size_t i = 0; i < g_last_tokens.size(); ++i) {
-        llama_token id = g_last_tokens[i];
-        if (id >= 0 && id < n_vocab) {
-            if (logits[id] <= 0) {
-                logits[id] *= repeat_penalty;
-            } else {
-                logits[id] /= repeat_penalty;
+    if (repeat_penalty > 1.0f && !g_last_tokens.empty()) {
+        for (size_t i = 0; i < g_last_tokens.size(); ++i) {
+            llama_token id = g_last_tokens[i];
+            if (id >= 0 && id < n_vocab) {
+                if (logits[id] <= 0) {
+                    logits[id] *= repeat_penalty;
+                } else {
+                    logits[id] /= repeat_penalty;
+                }
             }
         }
     }
@@ -162,9 +166,9 @@ Java_com_offlineai_ai_runtime_LlamaEngineNative_nativeGenerateToken(
         st.prompt_evaluated = false;
         st.pending = -1;
         st.n_past = 0;
+        
+        // Reset repetition history & memory/KV cache on new prompt turn
         g_last_tokens.clear();
-
-        // Clear residual memory / KV cache for a clean turn
         if (st.ctx) {
             llama_memory_t mem = llama_get_memory(st.ctx);
             if (mem) {
@@ -174,11 +178,10 @@ Java_com_offlineai_ai_runtime_LlamaEngineNative_nativeGenerateToken(
 
         const struct llama_vocab* vocab = llama_model_get_vocab(st.model);
         const char* p = env->GetStringUTFChars(jprompt, nullptr);
-        // add_special = false (ChatML formatted), parse_special = true
-        int n = llama_tokenize(vocab, p, (int)strlen(p), nullptr, 0, false, true);
+        int n = llama_tokenize(vocab, p, (int)strlen(p), nullptr, 0, true, true);
         if (n < 0) n = -n;
         std::vector<llama_token> toks(n);
-        int got = llama_tokenize(vocab, p, (int)strlen(p), toks.data(), (int)toks.size(), false, true);
+        int got = llama_tokenize(vocab, p, (int)strlen(p), toks.data(), (int)toks.size(), true, true);
         env->ReleaseStringUTFChars(jprompt, p);
         
         if (got > 0){
