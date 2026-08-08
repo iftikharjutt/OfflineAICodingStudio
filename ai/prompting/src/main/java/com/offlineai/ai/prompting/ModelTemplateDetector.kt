@@ -58,15 +58,15 @@ object ModelTemplateDetector {
     private fun buildQwenPrompt(systemText: String, history: List<Pair<String, String>>, userText: String): String {
         val sb = StringBuilder()
         if (systemText.isNotBlank()) {
-            sb.append("<|im_start|>system\n").append(systemText).append("\n<|im_end|>\n")
+            sb.append("<|im_start|>system\n").append(systemText).append("<|im_end|>\n")
         }
         for ((u, a) in history) {
-            sb.append("<|im_start|>user\n").append(u).append("\n<|im_end|>\n")
+            sb.append("<|im_start|>user\n").append(u).append("<|im_end|>\n")
             if (a.isNotBlank()) {
-                sb.append("<|im_start|>assistant\n").append(a).append("\n<|im_end|>\n")
+                sb.append("<|im_start|>assistant\n").append(a).append("<|im_end|>\n")
             }
         }
-        sb.append("<|im_start|>user\n").append(userText).append("\n<|im_end|>\n")
+        sb.append("<|im_start|>user\n").append(userText).append("<|im_end|>\n")
         sb.append("<|im_start|>assistant\n")
         return sb.toString()
     }

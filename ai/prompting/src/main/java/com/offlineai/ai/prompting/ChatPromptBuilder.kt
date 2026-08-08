@@ -7,7 +7,8 @@ data class ChatPromptContext(
     val modelPath: String? = null
 ) {
     companion object {
-        const val DEFAULT_CHAT_SYSTEM_PROMPT = """You are an expert AI software engineer.
+        const val DEFAULT_CHAT_SYSTEM_PROMPT = """You are an expert AI software engineer and a helpful assistant.
+If the user greets you, respond politely.
 When asked to generate code, you MUST output complete, fully functional, self-contained, working code files.
 Never truncate code, never skip sections, and never use comments like '// TODO' or '...'.
 Write all HTML, CSS, and JavaScript from start to finish without omitting any lines."""

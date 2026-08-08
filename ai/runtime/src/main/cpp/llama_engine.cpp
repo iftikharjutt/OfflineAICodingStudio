@@ -75,6 +75,16 @@ static llama_token sample_greedy(SessionState& st){
     for (int i = 1; i < n_vocab; ++i) {
         if (logits[i] > bv) { bv = logits[i]; best = i; }
     }
+    
+    // Debug logging for the top predicted token
+    char buf[128];
+    int len = llama_token_to_piece(vocab, best, buf, sizeof(buf), 0, true);
+    std::string token_str = (len > 0) ? std::string(buf, len) : "<unknown>";
+    
+    // Check if it's an EOG token
+    bool is_eog = llama_vocab_is_eog(vocab, best);
+    LOGI("Greedy sample: token_id=%d, logit=%.4f, str='%s', is_eog=%d", best, bv, token_str.c_str(), is_eog);
+    
     return (llama_token)best;
 }
 
@@ -153,35 +163,32 @@ Java_com_offlineai_ai_runtime_LlamaEngineNative_nativeGenerateToken(
         st.pending = -1;
         st.n_past = 0;
 
-        // Fix 1: Clear KV cache on new turn
+        // 1. Clear residual KV cache for clean turn evaluation
         if (st.ctx) {
-            llama_memory_t mem = llama_get_memory(st.ctx);
-            if (mem) {
-                llama_memory_clear(mem, true);
-            }
+            llama_kv_cache_clear(st.ctx);
         }
 
-        const struct llama_vocab* vocab = llama_model_get_vocab(st.model);
         const char* p = env->GetStringUTFChars(jprompt, nullptr);
-        // Fix 2: add_special = false, parse_special = true
-        int n = llama_tokenize(vocab, p, (int)strlen(p), nullptr, 0, false, true);
+        // 2. Set add_special = false, parse_special = true
+        int n = llama_tokenize(st.model, p, (int)strlen(p), nullptr, 0, false, true);
         if (n < 0) n = -n;
         std::vector<llama_token> toks(n);
-        int got = llama_tokenize(vocab, p, (int)strlen(p), toks.data(), (int)toks.size(), false, true);
+        int got = llama_tokenize(st.model, p, (int)strlen(p), toks.data(), (int)toks.size(), false, true);
         env->ReleaseStringUTFChars(jprompt, p);
         
-        if (got > 0){
-            toks.resize(got);
-            LOGI("Tokenized prompt into %d tokens. Starting evaluation...", got);
-            if (!eval_ids(st, toks)) {
-                LOGE("eval_ids failed for initial prompt tokens");
-                return env->NewStringUTF("");
-            }
-            st.prompt_evaluated = true;
-        } else {
-            LOGE("llama_tokenize returned 0 tokens for prompt");
+        LOGI("Tokenized prompt into %d tokens (add_special=false, parse_special=true)", got);
+        if (got <= 0) {
+            LOGE("llama_tokenize returned %d tokens – prompt may be empty or model incompatible", got);
             return env->NewStringUTF("");
         }
+
+        toks.resize(got);
+        LOGI("Starting evaluation of prompt tokens...");
+        if (!eval_ids(st, toks)) {
+            LOGE("eval_ids failed for initial prompt tokens");
+            return env->NewStringUTF("");
+        }
+        st.prompt_evaluated = true;
     } else {
         if (st.pending >= 0){
             if (!eval_ids(st, {st.pending})) {
@@ -192,16 +199,15 @@ Java_com_offlineai_ai_runtime_LlamaEngineNative_nativeGenerateToken(
         }
     }
 
-    const struct llama_vocab* vocab = llama_model_get_vocab(st.model);
     llama_token t = sample_greedy(st);
-    if (t < 0 || llama_vocab_is_eog(vocab, t)) {
+    if (t < 0 || llama_token_is_eog(st.model, t)) {
         return env->NewStringUTF("<EOS>");
     }
 
     st.pending = t;
     char buf[256];
-    // Fix 3: special = true so stop tokens pass to Kotlin
-    int len = llama_token_to_piece(vocab, t, buf, sizeof(buf), 0, true);
+    // 3. Set special = true so <|im_end|> is rendered to string for Kotlin stop sequence matching
+    int len = llama_token_to_piece(st.model, t, buf, sizeof(buf), 0, true);
     if (len <= 0) return env->NewStringUTF("");
     return env->NewStringUTF(std::string(buf, len).c_str());
 }
