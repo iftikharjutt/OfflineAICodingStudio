@@ -173,7 +173,7 @@ fun AppShell(
         NavigationDestination.Preview to Icons.Default.PlayArrow,
         NavigationDestination.Terminal to Icons.Default.Build,
         NavigationDestination.Models to Icons.Default.Storage,
-        NavigationDestination.Settings to Icons.Default.SettingsIcon,
+        NavigationDestination.Settings to SettingsIcon,
     )
 
     Scaffold(
