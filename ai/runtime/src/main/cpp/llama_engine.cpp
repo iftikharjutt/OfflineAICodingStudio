@@ -182,13 +182,22 @@ Java_com_offlineai_ai_runtime_LlamaEngineNative_nativeGenerateToken(
         st.pending = -1;
         st.n_past = 0;
 
-        if (st.ctx) llama_kv_cache_clear(st.ctx);
+        if (st.ctx) {
+            llama_memory_t memory = llama_get_memory(st.ctx);
+            if (memory) llama_memory_clear(memory, true);
+        }
+
+        const struct llama_vocab* vocab = llama_model_get_vocab(st.model);
+        if (!vocab) {
+            LOGE("Model has no vocabulary");
+            return env->NewStringUTF("");
+        }
 
         const char* p = env->GetStringUTFChars(jprompt, nullptr);
         if (!p) return env->NewStringUTF("");
         const int promptLen = (int)strlen(p);
 
-        int n = llama_tokenize(st.model, p, promptLen, nullptr, 0, false, true);
+        int n = llama_tokenize(vocab, p, promptLen, nullptr, 0, false, true);
         if (n < 0) n = -n;
         if (n <= 0) {
             env->ReleaseStringUTFChars(jprompt, p);
@@ -197,7 +206,7 @@ Java_com_offlineai_ai_runtime_LlamaEngineNative_nativeGenerateToken(
         }
 
         std::vector<llama_token> toks((size_t)n);
-        int got = llama_tokenize(st.model, p, promptLen, toks.data(), n, false, true);
+        int got = llama_tokenize(vocab, p, promptLen, toks.data(), n, false, true);
         env->ReleaseStringUTFChars(jprompt, p);
 
         LOGI("Tokenized prompt into %d tokens (add_special=false, parse_special=true)", got);
@@ -226,13 +235,14 @@ Java_com_offlineai_ai_runtime_LlamaEngineNative_nativeGenerateToken(
     }
 
     llama_token t = sample_greedy(st);
-    if (t < 0 || llama_vocab_is_eog(llama_model_get_vocab(st.model), t)) {
+    const struct llama_vocab* vocab = llama_model_get_vocab(st.model);
+    if (t < 0 || !vocab || llama_vocab_is_eog(vocab, t)) {
         return env->NewStringUTF("<EOS>");
     }
 
     st.pending = t;
     char buf[256];
-    int len = llama_token_to_piece(st.model, t, buf, sizeof(buf), 0, true);
+    int len = llama_token_to_piece(vocab, t, buf, sizeof(buf), 0, true);
     if (len <= 0) return env->NewStringUTF("");
     return env->NewStringUTF(std::string(buf, (size_t)len).c_str());
 }
