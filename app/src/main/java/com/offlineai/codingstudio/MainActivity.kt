@@ -14,10 +14,12 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.*
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Build
+import androidx.compose.material.icons.filled.Chat
 import androidx.compose.material.icons.filled.Code
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Settings as SettingsIcon
+import androidx.compose.material.icons.filled.Storage
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
@@ -147,9 +149,7 @@ fun AppShell(
         try {
             awaitCancellation()
         } finally {
-            result.getOrNull()?.let { session ->
-                inferenceEngine.unloadModel(session.sessionId)
-            }
+            result.getOrNull()?.let { session -> inferenceEngine.unloadModel(session.sessionId) }
             if (chatViewModel.activeSessionModelPath == model.path) {
                 chatViewModel.activeSessionModelPath = null
             }
@@ -159,9 +159,7 @@ fun AppShell(
     LaunchedEffect(activeProject, activeFilePath) {
         val proj = activeProject
         val path = activeFilePath
-        if (proj != null && path != null) {
-            editorViewModel.loadFile(File(proj.path), path)
-        }
+        if (proj != null && path != null) editorViewModel.loadFile(File(proj.path), path)
     }
 
     LaunchedEffect(activeProject) {
@@ -169,33 +167,43 @@ fun AppShell(
     }
 
     val destinations = listOf(
-        NavigationDestination.Chat to Icons.Default.Code,
+        NavigationDestination.Chat to Icons.Default.Chat,
         NavigationDestination.Projects to Icons.Default.Folder,
         NavigationDestination.Editor to Icons.Default.Code,
         NavigationDestination.Preview to Icons.Default.PlayArrow,
         NavigationDestination.Terminal to Icons.Default.Build,
-        NavigationDestination.Models to Icons.Default.Build,
+        NavigationDestination.Models to Icons.Default.Storage,
         NavigationDestination.Settings to Icons.Default.SettingsIcon,
     )
 
     Scaffold(
+        containerColor = MaterialTheme.colorScheme.background,
         topBar = {
             TopAppBar(
-                title = { Text(selectedDestination.title) },
+                title = {
+                    Text(
+                        text = selectedDestination.title,
+                        style = MaterialTheme.typography.titleLarge
+                    )
+                },
                 colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = MaterialTheme.colorScheme.primaryContainer,
-                    titleContentColor = MaterialTheme.colorScheme.onPrimaryContainer,
+                    containerColor = MaterialTheme.colorScheme.surface,
+                    titleContentColor = MaterialTheme.colorScheme.onSurface
                 )
             )
         },
         bottomBar = {
-            NavigationBar {
+            NavigationBar(
+                containerColor = MaterialTheme.colorScheme.surface,
+                tonalElevation = 4.dp
+            ) {
                 destinations.forEach { (destination, icon) ->
                     NavigationBarItem(
                         icon = { Icon(icon, contentDescription = destination.title) },
-                        label = { Text(destination.title) },
+                        label = null,
                         selected = selectedDestination == destination,
-                        onClick = { selectedDestination = destination }
+                        onClick = { selectedDestination = destination },
+                        alwaysShowLabel = false
                     )
                 }
             }
@@ -205,7 +213,7 @@ fun AppShell(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(paddingValues)
-                .padding(16.dp)
+                .padding(horizontal = 12.dp, vertical = 8.dp)
         ) {
             when (selectedDestination) {
                 NavigationDestination.Chat -> ChatScreen(
