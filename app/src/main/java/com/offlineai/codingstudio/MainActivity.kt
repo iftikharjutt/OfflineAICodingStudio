@@ -43,6 +43,7 @@ import com.offlineai.feature.settings.SettingsScreen
 import com.offlineai.feature.settings.SettingsViewModel
 import com.offlineai.feature.terminal.TerminalScreen
 import com.offlineai.feature.terminal.TerminalViewModel
+import kotlinx.coroutines.awaitCancellation
 import java.io.File
 
 class MainActivity : ComponentActivity() {
@@ -120,8 +121,6 @@ fun AppShell(
     val selectedModel by modelsViewModel.selectedModel.collectAsState()
     val currentSettings by settingsViewModel.settings.collectAsState()
 
-    // Keep exactly one native model session alive. When the model/settings change,
-    // the previous session is unloaded before the new one is loaded.
     LaunchedEffect(selectedModel?.path, currentSettings.contextSize, currentSettings.threadCount) {
         val model = selectedModel
         if (model == null) {
