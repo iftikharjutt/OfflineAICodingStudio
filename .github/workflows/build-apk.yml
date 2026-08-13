@@ -1,0 +1,68 @@
+name: Build OfflineAICodingStudio APK
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+      - 'fix/**'
+
+jobs:
+  build-apk:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout app
+        uses: actions/checkout@v4
+
+      - name: Checkout llama.cpp
+        uses: actions/checkout@v4
+        with:
+          repository: ggml-org/llama.cpp
+          path: llama.cpp
+
+      - name: Build llama.cpp static libs
+        run: |
+          cd llama.cpp
+          cmake -B build-android \
+            -DCMAKE_TOOLCHAIN_FILE=$ANDROID_NDK_HOME/build/cmake/android.toolchain.cmake \
+            -DANDROID_ABI=arm64-v8a \
+            -DANDROID_PLATFORM=android-26 \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DBUILD_SHARED_LIBS=OFF \
+            -DGGML_NATIVE=OFF \
+            -DGGML_OPENMP=OFF
+          cmake --build build-android --config Release -j$(nproc) --target llama
+
+      - name: Build JNI bridge
+        run: |
+          TC=$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64
+          $TC/bin/aarch64-linux-android26-clang++ \
+            -shared -fPIC -O3 -std=c++17 \
+            -I llama.cpp/include -I llama.cpp/ggml/include \
+            ai/runtime/src/main/cpp/llama_engine.cpp \
+            -Wl,--start-group $(find llama.cpp/build-android -name '*.a') -Wl,--end-group \
+            -static-libstdc++ -llog -lm -ldl \
+            -o libllama_engine.so
+
+      - name: Package native library
+        run: |
+          mkdir -p ai/runtime/src/main/jniLibs/arm64-v8a
+          cp libllama_engine.so ai/runtime/src/main/jniLibs/arm64-v8a/
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Build debug APK
+        uses: gradle/gradle-build-action@v3
+        with:
+          gradle-version: '8.7'
+          arguments: ':app:assembleDebug --stacktrace'
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: OfflineAICodingStudio-debug
+          path: app/build/outputs/apk/debug/*.apk
