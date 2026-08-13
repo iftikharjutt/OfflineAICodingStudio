@@ -7,6 +7,7 @@ import android.os.Build
 import android.os.Bundle
 import android.os.Environment
 import android.provider.Settings
+import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
@@ -53,7 +54,6 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        // Request storage permissions for Android 10 and below
         if (Build.VERSION.SDK_INT <= Build.VERSION_CODES.Q) {
             requestPermissionLauncher.launch(
                 arrayOf(
@@ -63,18 +63,15 @@ class MainActivity : ComponentActivity() {
             )
         }
 
-        // Request All Files Access for Android 11+
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-            if (!Environment.isExternalStorageManager()) {
-                try {
-                    val intent = Intent(Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION).apply {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R && !Environment.isExternalStorageManager()) {
+            try {
+                startActivity(
+                    Intent(Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION).apply {
                         data = Uri.parse("package:$packageName")
                     }
-                    startActivity(intent)
-                } catch (e: Exception) {
-                    val intent = Intent(Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION)
-                    startActivity(intent)
-                }
+                )
+            } catch (_: Exception) {
+                startActivity(Intent(Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION))
             }
         }
 
@@ -120,23 +117,46 @@ fun AppShell(
     var selectedDestination by remember { mutableStateOf<NavigationDestination>(NavigationDestination.Chat) }
     val activeProject by projectsViewModel.activeProject.collectAsState()
     val activeFilePath by projectsViewModel.activeFilePath.collectAsState()
-
-    // Load the selected GGUF model into the inference engine
     val selectedModel by modelsViewModel.selectedModel.collectAsState()
     val currentSettings by settingsViewModel.settings.collectAsState()
-    LaunchedEffect(selectedModel, currentSettings) {
-        selectedModel?.let { model ->
-            inferenceEngine.loadModel(
-                ModelLoadRequest(
-                    modelPath = model.path,
-                    contextSize = currentSettings.contextSize,
-                    threadCount = currentSettings.threadCount
-                )
+
+    // Keep exactly one native model session alive. When the model/settings change,
+    // the previous session is unloaded before the new one is loaded.
+    LaunchedEffect(selectedModel?.path, currentSettings.contextSize, currentSettings.threadCount) {
+        val model = selectedModel
+        if (model == null) {
+            chatViewModel.activeSessionModelPath = null
+            return@LaunchedEffect
+        }
+
+        val result = inferenceEngine.loadModel(
+            ModelLoadRequest(
+                modelPath = model.path,
+                contextSize = currentSettings.contextSize,
+                threadCount = currentSettings.threadCount
             )
+        )
+
+        result.onSuccess { session ->
+            chatViewModel.activeSessionModelPath = session.modelPath
+            Log.i("OfflineAICodingStudio", "Inference session ready: ${session.sessionId}")
+        }.onFailure { error ->
+            chatViewModel.activeSessionModelPath = null
+            Log.e("OfflineAICodingStudio", "Unable to load selected GGUF model", error)
+        }
+
+        try {
+            awaitCancellation()
+        } finally {
+            result.getOrNull()?.let { session ->
+                inferenceEngine.unloadModel(session.sessionId)
+            }
+            if (chatViewModel.activeSessionModelPath == model.path) {
+                chatViewModel.activeSessionModelPath = null
+            }
         }
     }
 
-    // Sync editor when active file changes
     LaunchedEffect(activeProject, activeFilePath) {
         val proj = activeProject
         val path = activeFilePath
@@ -145,12 +165,8 @@ fun AppShell(
         }
     }
 
-    // Start local web preview server for active project
     LaunchedEffect(activeProject) {
-        val proj = activeProject
-        if (proj != null) {
-            previewViewModel.startServerForProject(File(proj.path))
-        }
+        activeProject?.let { previewViewModel.startServerForProject(File(it.path)) }
     }
 
     val destinations = listOf(
