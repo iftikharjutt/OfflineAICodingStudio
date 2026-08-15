@@ -41,7 +41,8 @@ class ChatViewModel(
     enum class ModelLoadState {
         Idle,
         Loading,
-        Loaded
+        Loaded,
+        Failed
     }
 
     private val executor = AgenticPatchExecutor(workspaceManager)
