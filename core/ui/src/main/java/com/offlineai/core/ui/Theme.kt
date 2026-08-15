@@ -12,6 +12,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 
+private val ColorBlack = Color(0xFF081014)
+
 private val DarkColorScheme = darkColorScheme(
     primary = PrimaryCyan,
     onPrimary = ColorBlack,
@@ -72,8 +74,6 @@ private val StudioShapes = Shapes(
     large = androidx.compose.foundation.shape.RoundedCornerShape(18.dp),
     extraLarge = androidx.compose.foundation.shape.RoundedCornerShape(24.dp)
 )
-
-private val ColorBlack = Color(0xFF081014)
 
 @Composable
 fun OfflineAITheme(
