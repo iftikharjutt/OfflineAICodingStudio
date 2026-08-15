@@ -18,7 +18,6 @@ import androidx.compose.material.icons.filled.Chat
 import androidx.compose.material.icons.filled.Code
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.PlayArrow
-import androidx.compose.material.icons.filled.Settings as SettingsIcon
 import androidx.compose.material.icons.filled.Storage
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -122,14 +121,10 @@ fun AppShell(
     val selectedModel by modelsViewModel.selectedModel.collectAsState()
     val currentSettings by settingsViewModel.settings.collectAsState()
 
-    // Keep the native session alive for the lifetime of the selected model/settings.
-    // The previous implementation used awaitCancellation() inside this effect, which
-    // immediately entered the cleanup path when Compose restarted the effect for a
-    // settings/model update and could clear the session while Chat was being used.
     LaunchedEffect(selectedModel?.path, currentSettings.contextSize, currentSettings.threadCount) {
         val model = selectedModel
         if (model == null) {
-            chatViewModel.setModelLoadState(null, null)
+            chatViewModel.setModelLoadState(null, ChatViewModel.ModelLoadState.Idle)
             return@LaunchedEffect
         }
 
@@ -146,7 +141,11 @@ fun AppShell(
             chatViewModel.setModelLoadState(session.modelPath, ChatViewModel.ModelLoadState.Loaded)
             Log.i("OfflineAICodingStudio", "Inference session ready: ${session.sessionId}")
         }.onFailure { error ->
-            chatViewModel.setModelLoadState(model.path, ChatViewModel.ModelLoadState.Failed(error.message ?: "Unable to load GGUF model"))
+            chatViewModel.setModelLoadState(
+                model.path,
+                ChatViewModel.ModelLoadState.Failed,
+                error.message ?: "Unable to load GGUF model"
+            )
             Log.e("OfflineAICodingStudio", "Unable to load selected GGUF model", error)
         }
     }
@@ -168,7 +167,7 @@ fun AppShell(
         NavigationDestination.Preview to Icons.Default.PlayArrow,
         NavigationDestination.Terminal to Icons.Default.Build,
         NavigationDestination.Models to Icons.Default.Storage,
-        NavigationDestination.Settings to SettingsIcon,
+        NavigationDestination.Settings to Icons.Default.Build,
     )
 
     Scaffold(
