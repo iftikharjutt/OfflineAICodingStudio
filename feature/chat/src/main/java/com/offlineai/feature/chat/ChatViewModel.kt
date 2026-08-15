@@ -38,6 +38,12 @@ class ChatViewModel(
     private val inferenceEngine: LlamaInferenceEngine
 ) : ViewModel() {
 
+    enum class ModelLoadState {
+        Idle,
+        Loading,
+        Loaded
+    }
+
     private val executor = AgenticPatchExecutor(workspaceManager)
     private val conversationManager = ConversationManager(maxTurnsHistory = 10)
 
@@ -50,7 +56,20 @@ class ChatViewModel(
     private val _isGenerating = MutableStateFlow(false)
     val isGenerating: StateFlow<Boolean> = _isGenerating.asStateFlow()
 
+    private val _modelLoadState = MutableStateFlow(ModelLoadState.Idle)
+    val modelLoadState: StateFlow<ModelLoadState> = _modelLoadState.asStateFlow()
+
+    private val _modelLoadError = MutableStateFlow<String?>(null)
+    val modelLoadError: StateFlow<String?> = _modelLoadError.asStateFlow()
+
     var activeSessionModelPath: String? = null
+        private set
+
+    fun setModelLoadState(path: String?, state: ModelLoadState, error: String? = null) {
+        activeSessionModelPath = if (state == ModelLoadState.Loaded) path else null
+        _modelLoadState.value = state
+        _modelLoadError.value = error
+    }
 
     fun setMode(mode: AssistantMode) {
         _activeMode.value = mode
@@ -68,8 +87,17 @@ class ChatViewModel(
             Log.w("ChatViewModel", "Ignoring sendMessage while another generation is active.")
             return
         }
+        if (_modelLoadState.value != ModelLoadState.Loaded) {
+            Log.w("ChatViewModel", "Ignoring sendMessage because no model session is ready: ${_modelLoadState.value}")
+            return
+        }
 
-        val effectiveModelPath = modelPath ?: activeSessionModelPath
+        val effectiveModelPath = activeSessionModelPath ?: modelPath
+        if (effectiveModelPath == null) {
+            Log.w("ChatViewModel", "Ignoring sendMessage because no loaded model path is available.")
+            return
+        }
+
         val currentMode = _activeMode.value
         val userMsg = ChatMessage(sender = "user", text = userText, mode = currentMode)
         val assistantMsgId = java.util.UUID.randomUUID().toString()
@@ -136,7 +164,6 @@ class ChatViewModel(
                         modelPath = effectiveModelPath
                     )
                 ).collect { event ->
-                    // Once a terminal event is received, ignore any stale events emitted by a buggy/native implementation.
                     if (generationFailed) return@collect
 
                     when (event) {
