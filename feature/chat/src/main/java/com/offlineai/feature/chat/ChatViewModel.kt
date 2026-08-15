@@ -38,11 +38,11 @@ class ChatViewModel(
     private val inferenceEngine: LlamaInferenceEngine
 ) : ViewModel() {
 
-    enum class ModelLoadState {
-        Idle,
-        Loading,
-        Loaded,
-        Failed
+    sealed class ModelLoadState {
+        data object Idle : ModelLoadState()
+        data object Loading : ModelLoadState()
+        data object Loaded : ModelLoadState()
+        data class Failed(val message: String) : ModelLoadState()
     }
 
     private val executor = AgenticPatchExecutor(workspaceManager)
@@ -57,7 +57,7 @@ class ChatViewModel(
     private val _isGenerating = MutableStateFlow(false)
     val isGenerating: StateFlow<Boolean> = _isGenerating.asStateFlow()
 
-    private val _modelLoadState = MutableStateFlow(ModelLoadState.Idle)
+    private val _modelLoadState = MutableStateFlow<ModelLoadState>(ModelLoadState.Idle)
     val modelLoadState: StateFlow<ModelLoadState> = _modelLoadState.asStateFlow()
 
     private val _modelLoadError = MutableStateFlow<String?>(null)
@@ -67,9 +67,9 @@ class ChatViewModel(
         private set
 
     fun setModelLoadState(path: String?, state: ModelLoadState, error: String? = null) {
-        activeSessionModelPath = if (state == ModelLoadState.Loaded) path else null
+        activeSessionModelPath = if (state is ModelLoadState.Loaded) path else null
         _modelLoadState.value = state
-        _modelLoadError.value = error
+        _modelLoadError.value = error ?: (state as? ModelLoadState.Failed)?.message
     }
 
     fun setMode(mode: AssistantMode) {
@@ -88,7 +88,7 @@ class ChatViewModel(
             Log.w("ChatViewModel", "Ignoring sendMessage while another generation is active.")
             return
         }
-        if (_modelLoadState.value != ModelLoadState.Loaded) {
+        if (_modelLoadState.value !is ModelLoadState.Loaded) {
             Log.w("ChatViewModel", "Ignoring sendMessage because no model session is ready: ${_modelLoadState.value}")
             return
         }
