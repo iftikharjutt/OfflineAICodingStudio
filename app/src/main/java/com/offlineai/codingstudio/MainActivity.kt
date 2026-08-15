@@ -48,30 +48,16 @@ import com.offlineai.feature.terminal.TerminalViewModel
 import java.io.File
 
 class MainActivity : ComponentActivity() {
-
-    private val requestPermissionLauncher = registerForActivityResult(
-        ActivityResultContracts.RequestMultiplePermissions()
-    ) { _ -> }
+    private val requestPermissionLauncher = registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { _ -> }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-
         if (Build.VERSION.SDK_INT <= Build.VERSION_CODES.Q) {
-            requestPermissionLauncher.launch(
-                arrayOf(
-                    Manifest.permission.READ_EXTERNAL_STORAGE,
-                    Manifest.permission.WRITE_EXTERNAL_STORAGE
-                )
-            )
+            requestPermissionLauncher.launch(arrayOf(Manifest.permission.READ_EXTERNAL_STORAGE, Manifest.permission.WRITE_EXTERNAL_STORAGE))
         }
-
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R && !Environment.isExternalStorageManager()) {
             try {
-                startActivity(
-                    Intent(Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION).apply {
-                        data = Uri.parse("package:$packageName")
-                    }
-                )
+                startActivity(Intent(Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION).apply { data = Uri.parse("package:$packageName") })
             } catch (_: Exception) {
                 startActivity(Intent(Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION))
             }
@@ -89,16 +75,7 @@ class MainActivity : ComponentActivity() {
 
         setContent {
             OfflineAITheme {
-                AppShell(
-                    projectsViewModel = projectsViewModel,
-                    editorViewModel = editorViewModel,
-                    previewViewModel = previewViewModel,
-                    chatViewModel = chatViewModel,
-                    terminalViewModel = terminalViewModel,
-                    modelsViewModel = modelsViewModel,
-                    settingsViewModel = settingsViewModel,
-                    inferenceEngine = inferenceEngine
-                )
+                AppShell(projectsViewModel, editorViewModel, previewViewModel, chatViewModel, terminalViewModel, modelsViewModel, settingsViewModel, inferenceEngine)
             }
         }
     }
@@ -130,23 +107,13 @@ fun AppShell(
         }
 
         chatViewModel.setModelLoadState(model.path, ChatViewModel.ModelLoadState.Loading)
-        val result = inferenceEngine.loadModel(
-            ModelLoadRequest(
-                modelPath = model.path,
-                contextSize = currentSettings.contextSize,
-                threadCount = currentSettings.threadCount
-            )
-        )
-
+        val result = inferenceEngine.loadModel(ModelLoadRequest(modelPath = model.path, contextSize = currentSettings.contextSize, threadCount = currentSettings.threadCount))
         result.onSuccess { session ->
             chatViewModel.setModelLoadState(session.modelPath, ChatViewModel.ModelLoadState.Loaded)
             Log.i("OfflineAICodingStudio", "Inference session ready: ${session.sessionId}")
         }.onFailure { error ->
-            chatViewModel.setModelLoadState(
-                model.path,
-                ChatViewModel.ModelLoadState.Failed,
-                error.message ?: "Unable to load GGUF model"
-            )
+            val message = error.message ?: "Unable to load GGUF model"
+            chatViewModel.setModelLoadState(model.path, ChatViewModel.ModelLoadState.Failed(message), message)
             Log.e("OfflineAICodingStudio", "Unable to load selected GGUF model", error)
         }
     }
@@ -156,10 +123,7 @@ fun AppShell(
         val path = activeFilePath
         if (proj != null && path != null) editorViewModel.loadFile(File(proj.path), path)
     }
-
-    LaunchedEffect(activeProject) {
-        activeProject?.let { previewViewModel.startServerForProject(File(it.path)) }
-    }
+    LaunchedEffect(activeProject) { activeProject?.let { previewViewModel.startServerForProject(File(it.path)) } }
 
     val destinations = listOf(
         NavigationDestination.Chat to Icons.Default.Chat,
@@ -168,30 +132,19 @@ fun AppShell(
         NavigationDestination.Preview to Icons.Default.PlayArrow,
         NavigationDestination.Terminal to Icons.Default.Build,
         NavigationDestination.Models to Icons.Default.Storage,
-        NavigationDestination.Settings to SettingsIcon,
+        NavigationDestination.Settings to SettingsIcon
     )
 
     Scaffold(
         containerColor = MaterialTheme.colorScheme.background,
         topBar = {
             TopAppBar(
-                title = {
-                    Text(
-                        text = selectedDestination.title,
-                        style = MaterialTheme.typography.titleLarge
-                    )
-                },
-                colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = MaterialTheme.colorScheme.surface,
-                    titleContentColor = MaterialTheme.colorScheme.onSurface
-                )
+                title = { Text(selectedDestination.title, style = MaterialTheme.typography.titleLarge) },
+                colors = TopAppBarDefaults.topAppBarColors(containerColor = MaterialTheme.colorScheme.surface, titleContentColor = MaterialTheme.colorScheme.onSurface)
             )
         },
         bottomBar = {
-            NavigationBar(
-                containerColor = MaterialTheme.colorScheme.surface,
-                tonalElevation = 4.dp
-            ) {
+            NavigationBar(containerColor = MaterialTheme.colorScheme.surface, tonalElevation = 4.dp) {
                 destinations.forEach { (destination, icon) ->
                     NavigationBarItem(
                         icon = { Icon(icon, contentDescription = destination.title) },
@@ -204,27 +157,15 @@ fun AppShell(
             }
         }
     ) { paddingValues ->
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(paddingValues)
-                .padding(horizontal = 12.dp, vertical = 8.dp)
-        ) {
+        Box(Modifier.fillMaxSize().padding(paddingValues).padding(horizontal = 12.dp, vertical = 8.dp)) {
             when (selectedDestination) {
-                NavigationDestination.Chat -> ChatScreen(
-                    viewModel = chatViewModel,
-                    activeProjectDir = activeProject?.let { File(it.path) },
-                    selectedModelPath = selectedModel?.path
-                )
-                NavigationDestination.Projects -> ProjectsScreen(viewModel = projectsViewModel)
-                NavigationDestination.Editor -> EditorScreen(viewModel = editorViewModel)
-                NavigationDestination.Preview -> PreviewScreen(viewModel = previewViewModel)
-                NavigationDestination.Terminal -> TerminalScreen(
-                    viewModel = terminalViewModel,
-                    workingDir = activeProject?.let { File(it.path) }
-                )
-                NavigationDestination.Models -> ModelsScreen(viewModel = modelsViewModel)
-                NavigationDestination.Settings -> SettingsScreen(viewModel = settingsViewModel)
+                NavigationDestination.Chat -> ChatScreen(chatViewModel, activeProject?.let { File(it.path) }, selectedModel?.path)
+                NavigationDestination.Projects -> ProjectsScreen(projectsViewModel)
+                NavigationDestination.Editor -> EditorScreen(editorViewModel)
+                NavigationDestination.Preview -> PreviewScreen(previewViewModel)
+                NavigationDestination.Terminal -> TerminalScreen(terminalViewModel, activeProject?.let { File(it.path) })
+                NavigationDestination.Models -> ModelsScreen(modelsViewModel)
+                NavigationDestination.Settings -> SettingsScreen(settingsViewModel)
             }
         }
     }
