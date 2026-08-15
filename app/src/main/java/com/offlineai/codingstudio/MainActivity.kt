@@ -45,7 +45,6 @@ import com.offlineai.feature.settings.SettingsScreen
 import com.offlineai.feature.settings.SettingsViewModel
 import com.offlineai.feature.terminal.TerminalScreen
 import com.offlineai.feature.terminal.TerminalViewModel
-import kotlinx.coroutines.awaitCancellation
 import java.io.File
 
 class MainActivity : ComponentActivity() {
@@ -123,13 +122,18 @@ fun AppShell(
     val selectedModel by modelsViewModel.selectedModel.collectAsState()
     val currentSettings by settingsViewModel.settings.collectAsState()
 
+    // Keep the native session alive for the lifetime of the selected model/settings.
+    // The previous implementation used awaitCancellation() inside this effect, which
+    // immediately entered the cleanup path when Compose restarted the effect for a
+    // settings/model update and could clear the session while Chat was being used.
     LaunchedEffect(selectedModel?.path, currentSettings.contextSize, currentSettings.threadCount) {
         val model = selectedModel
         if (model == null) {
-            chatViewModel.activeSessionModelPath = null
+            chatViewModel.setModelLoadState(null, null)
             return@LaunchedEffect
         }
 
+        chatViewModel.setModelLoadState(model.path, ChatViewModel.ModelLoadState.Loading)
         val result = inferenceEngine.loadModel(
             ModelLoadRequest(
                 modelPath = model.path,
@@ -139,20 +143,11 @@ fun AppShell(
         )
 
         result.onSuccess { session ->
-            chatViewModel.activeSessionModelPath = session.modelPath
+            chatViewModel.setModelLoadState(session.modelPath, ChatViewModel.ModelLoadState.Loaded)
             Log.i("OfflineAICodingStudio", "Inference session ready: ${session.sessionId}")
         }.onFailure { error ->
-            chatViewModel.activeSessionModelPath = null
+            chatViewModel.setModelLoadState(model.path, ChatViewModel.ModelLoadState.Failed(error.message ?: "Unable to load GGUF model"))
             Log.e("OfflineAICodingStudio", "Unable to load selected GGUF model", error)
-        }
-
-        try {
-            awaitCancellation()
-        } finally {
-            result.getOrNull()?.let { session -> inferenceEngine.unloadModel(session.sessionId) }
-            if (chatViewModel.activeSessionModelPath == model.path) {
-                chatViewModel.activeSessionModelPath = null
-            }
         }
     }
 
