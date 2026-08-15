@@ -1,6 +1,5 @@
 package com.offlineai.feature.chat
 
-import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -14,7 +13,6 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontFamily
@@ -38,338 +36,232 @@ fun ChatScreen(
     val messages by viewModel.messages.collectAsState()
     val isGenerating by viewModel.isGenerating.collectAsState()
     val activeMode by viewModel.activeMode.collectAsState()
-
+    val modelLoadState by viewModel.modelLoadState.collectAsState()
+    val modelLoadError by viewModel.modelLoadError.collectAsState()
     var inputText by remember { mutableStateOf("") }
     var showDiagnosticsDialog by remember { mutableStateOf(false) }
-
     val clipboardManager = LocalClipboardManager.current
     val diagnosticReport by DiagnosticsManager.currentReport.collectAsState()
+    val modelReady = modelLoadState == ChatViewModel.ModelLoadState.Loaded
 
     Column(modifier = modifier.fillMaxSize()) {
-        // Mode Selector Bar & Diagnostics Button
-        Surface(
-            color = MaterialTheme.colorScheme.surfaceVariant,
-            modifier = Modifier.fillMaxWidth()
-        ) {
+        Surface(color = MaterialTheme.colorScheme.surface, tonalElevation = 2.dp) {
             Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 12.dp, vertical = 6.dp),
+                Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.SpaceBetween
             ) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(
-                        text = "Mode:",
-                        style = MaterialTheme.typography.labelLarge,
-                        fontWeight = FontWeight.Bold
-                    )
+                    Text("Mode", style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.SemiBold)
                     Spacer(Modifier.width(8.dp))
                     FilterChip(
                         selected = activeMode == AssistantMode.CHAT,
                         onClick = { viewModel.setMode(AssistantMode.CHAT) },
-                        label = { Text("Chat Mode") },
-                        leadingIcon = {
-                            Icon(
-                                Icons.Default.ChatBubble,
-                                contentDescription = null,
-                                tint = Color(0xFF2196F3)
-                            )
-                        },
-                        colors = FilterChipDefaults.filterChipColors(
-                            selectedContainerColor = Color(0xFF2196F3).copy(alpha = 0.2f),
-                            selectedLabelColor = Color(0xFF2196F3)
-                        )
+                        label = { Text("Chat") },
+                        leadingIcon = { Icon(Icons.Default.ChatBubbleOutline, null, Modifier.size(18.dp)) }
                     )
                     Spacer(Modifier.width(6.dp))
                     FilterChip(
                         selected = activeMode == AssistantMode.AGENT,
                         onClick = { viewModel.setMode(AssistantMode.AGENT) },
-                        label = { Text("Agent Mode") },
-                        leadingIcon = {
-                            Icon(
-                                Icons.Default.Build,
-                                contentDescription = null,
-                                tint = Color(0xFFFF9800)
-                            )
-                        },
-                        colors = FilterChipDefaults.filterChipColors(
-                            selectedContainerColor = Color(0xFFFF9800).copy(alpha = 0.2f),
-                            selectedLabelColor = Color(0xFFFF9800)
-                        )
+                        label = { Text("Agent") },
+                        leadingIcon = { Icon(Icons.Default.Build, null, Modifier.size(18.dp)) }
                     )
                 }
-
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     IconButton(onClick = { showDiagnosticsDialog = true }) {
                         Icon(
-                            imageVector = if (diagnosticReport.lastErrorMessage != null) Icons.Default.Warning else Icons.Default.Info,
-                            contentDescription = "Diagnostics Report",
-                            tint = if (diagnosticReport.lastErrorMessage != null) Color.Red else MaterialTheme.colorScheme.primary
+                            if (diagnosticReport.lastErrorMessage != null) Icons.Default.Warning else Icons.Default.Info,
+                            contentDescription = "Diagnostics",
+                            tint = if (diagnosticReport.lastErrorMessage != null) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary
                         )
                     }
                     IconButton(onClick = { viewModel.clearHistory() }) {
-                        Icon(
-                            Icons.Default.DeleteSweep,
-                            contentDescription = "Clear Chat",
-                            tint = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
+                        Icon(Icons.Default.DeleteSweep, "Clear chat", tint = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                 }
             }
         }
 
-        // Warning Banner if No Model File Selected
-        if (selectedModelPath == null) {
-            Surface(
-                color = Color(0xFFFFF3CD),
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Row(
-                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Icon(
-                        Icons.Default.Warning,
-                        contentDescription = null,
-                        tint = Color(0xFF856404),
-                        modifier = Modifier.size(20.dp)
-                    )
-                    Spacer(Modifier.width(8.dp))
-                    Text(
-                        text = "No GGUF Model loaded. Open 'Models' tab to select/load a model.",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = Color(0xFF856404)
-                    )
-                }
-            }
+        val bannerText = when (modelLoadState) {
+            ChatViewModel.ModelLoadState.Idle -> "No GGUF model loaded. Open Models to select one."
+            ChatViewModel.ModelLoadState.Loading -> "Loading GGUF model… Chat will be ready when loading finishes."
+            ChatViewModel.ModelLoadState.Loaded -> "GGUF model ready • Offline inference enabled"
+        }
+        val bannerColor = when (modelLoadState) {
+            ChatViewModel.ModelLoadState.Idle -> MaterialTheme.colorScheme.tertiaryContainer
+            ChatViewModel.ModelLoadState.Loading -> MaterialTheme.colorScheme.secondaryContainer
+            ChatViewModel.ModelLoadState.Loaded -> MaterialTheme.colorScheme.primaryContainer
+        }
+        val bannerContentColor = when (modelLoadState) {
+            ChatViewModel.ModelLoadState.Idle -> MaterialTheme.colorScheme.onTertiaryContainer
+            ChatViewModel.ModelLoadState.Loading -> MaterialTheme.colorScheme.onSecondaryContainer
+            ChatViewModel.ModelLoadState.Loaded -> MaterialTheme.colorScheme.onPrimaryContainer
         }
 
-        HorizontalDivider()
-
-        // Chat Messages List
-        LazyColumn(
-            modifier = Modifier
-                .weight(1f)
-                .fillMaxWidth()
-                .padding(horizontal = 8.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            items(messages) { msg ->
-                ChatMessageBubble(
-                    message = msg,
-                    onApplyPatch = {
-                        if (activeProjectDir != null) {
-                            viewModel.applyPatchToProject(msg.id, activeProjectDir)
-                        }
-                    }
-                )
-            }
-        }
-
-        if (isGenerating) {
-            LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
-        }
-
-        HorizontalDivider()
-
-        // Input Field & Send Button
         Surface(
-            color = MaterialTheme.colorScheme.surfaceVariant,
+            color = bannerColor,
+            tonalElevation = 1.dp,
             modifier = Modifier.fillMaxWidth()
         ) {
+            Row(Modifier.padding(horizontal = 16.dp, vertical = 9.dp), verticalAlignment = Alignment.CenterVertically) {
+                Icon(
+                    when (modelLoadState) {
+                        ChatViewModel.ModelLoadState.Loaded -> Icons.Default.CheckCircle
+                        ChatViewModel.ModelLoadState.Loading -> Icons.Default.Sync
+                        ChatViewModel.ModelLoadState.Idle -> Icons.Default.WarningAmber
+                    },
+                    null,
+                    Modifier.size(19.dp),
+                    tint = bannerContentColor
+                )
+                Spacer(Modifier.width(9.dp))
+                Column(Modifier.weight(1f)) {
+                    Text(bannerText, style = MaterialTheme.typography.bodySmall, color = bannerContentColor)
+                    if (modelLoadState == ChatViewModel.ModelLoadState.Loading) {
+                        LinearProgressIndicator(Modifier.fillMaxWidth().padding(top = 5.dp))
+                    }
+                    if (modelLoadState == ChatViewModel.ModelLoadState.Idle && modelLoadError != null) {
+                        Text(modelLoadError ?: "", style = MaterialTheme.typography.bodySmall, color = bannerContentColor)
+                    }
+                }
+            }
+        }
+
+        LazyColumn(
+            modifier = Modifier.weight(1f).fillMaxWidth().padding(horizontal = 10.dp),
+            contentPadding = PaddingValues(vertical = 12.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            items(messages, key = { it.id }) { msg ->
+                ChatMessageBubble(msg) {
+                    if (activeProjectDir != null) viewModel.applyPatchToProject(msg.id, activeProjectDir)
+                }
+            }
+        }
+
+        if (isGenerating) LinearProgressIndicator(Modifier.fillMaxWidth())
+
+        Surface(color = MaterialTheme.colorScheme.surface, tonalElevation = 4.dp) {
             Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(8.dp),
-                verticalAlignment = Alignment.CenterVertically
+                Modifier.fillMaxWidth().padding(10.dp),
+                verticalAlignment = Alignment.Bottom
             ) {
                 OutlinedTextField(
                     value = inputText,
                     onValueChange = { inputText = it },
                     placeholder = {
                         Text(
-                            if (activeMode == AssistantMode.CHAT)
-                                "Ask AI a question or request guidance..."
-                            else
-                                "Ask Agent to build, edit, or refactor code..."
+                            when {
+                                !modelReady -> "Load a GGUF model to start chatting…"
+                                activeMode == AssistantMode.CHAT -> "Ask the offline AI…"
+                                else -> "Ask Agent to build or refactor…"
+                            }
                         )
                     },
                     modifier = Modifier.weight(1f),
-                    singleLine = false,
-                    maxLines = 3
+                    minLines = 1,
+                    maxLines = 4,
+                    shape = RoundedCornerShape(16.dp),
+                    enabled = modelReady && !isGenerating
                 )
                 Spacer(Modifier.width(8.dp))
-                IconButton(
+                FilledIconButton(
                     onClick = {
-                        if (inputText.isNotBlank()) {
+                        if (modelReady && inputText.isNotBlank()) {
                             viewModel.sendMessage(inputText, activeProjectDir, selectedModelPath)
                             inputText = ""
                         }
                     },
-                    enabled = !isGenerating && inputText.isNotBlank()
+                    enabled = modelReady && !isGenerating && inputText.isNotBlank(),
+                    modifier = Modifier.size(50.dp)
                 ) {
-                    Icon(
-                        imageVector = Icons.AutoMirrored.Filled.Send,
-                        contentDescription = "Send Prompt",
-                        tint = if (inputText.isNotBlank()) {
-                            if (activeMode == AssistantMode.CHAT) Color(0xFF2196F3) else Color(0xFFFF9800)
-                        } else Color.Gray
-                    )
+                    Icon(Icons.AutoMirrored.Filled.Send, "Send prompt")
                 }
             }
         }
     }
 
-    // Diagnostics & Error Report Dialog
     if (showDiagnosticsDialog) {
         AlertDialog(
             onDismissRequest = { showDiagnosticsDialog = false },
-            title = {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Icon(Icons.Default.BugReport, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
-                    Spacer(Modifier.width(8.dp))
-                    Text("System Diagnostics & Error Report")
-                }
-            },
+            icon = { Icon(Icons.Default.BugReport, null) },
+            title = { Text("Diagnostics") },
             text = {
-                val reportText = DiagnosticsManager.generateFormattedSummary()
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .heightIn(max = 360.dp)
-                        .verticalScroll(rememberScrollState())
-                ) {
-                    Text(
-                        text = reportText,
-                        fontFamily = FontFamily.Monospace,
-                        fontSize = 11.sp,
-                        color = MaterialTheme.colorScheme.onSurface
-                    )
-                }
+                Text(
+                    DiagnosticsManager.generateFormattedSummary(),
+                    fontFamily = FontFamily.Monospace,
+                    fontSize = 11.sp,
+                    modifier = Modifier.fillMaxWidth().heightIn(max = 360.dp).verticalScroll(rememberScrollState())
+                )
             },
             confirmButton = {
-                Button(
-                    onClick = {
-                        val reportText = DiagnosticsManager.generateFormattedSummary()
-                        clipboardManager.setText(AnnotatedString(reportText))
-                    }
-                ) {
-                    Icon(Icons.Default.ContentCopy, contentDescription = null, modifier = Modifier.size(16.dp))
-                    Spacer(Modifier.width(4.dp))
-                    Text("Copy Full Report")
-                }
+                TextButton(onClick = {
+                    clipboardManager.setText(AnnotatedString(DiagnosticsManager.generateFormattedSummary()))
+                }) { Text("Copy report") }
             },
-            dismissButton = {
-                TextButton(onClick = { showDiagnosticsDialog = false }) {
-                    Text("Close")
-                }
-            }
+            dismissButton = { TextButton(onClick = { showDiagnosticsDialog = false }) { Text("Close") } }
         )
     }
 }
 
 @Composable
-fun ChatMessageBubble(
-    message: ChatMessage,
-    onApplyPatch: () -> Unit
-) {
+fun ChatMessageBubble(message: ChatMessage, onApplyPatch: () -> Unit) {
     val isUser = message.sender == "user"
-
     Row(
-        modifier = Modifier.fillMaxWidth(),
+        Modifier.fillMaxWidth(),
         horizontalArrangement = if (isUser) Arrangement.End else Arrangement.Start
     ) {
         Card(
+            modifier = Modifier.widthIn(max = 360.dp),
+            shape = RoundedCornerShape(16.dp),
             colors = CardDefaults.cardColors(
-                containerColor = if (isUser)
-                    MaterialTheme.colorScheme.primaryContainer
-                else
-                    MaterialTheme.colorScheme.secondaryContainer
-            ),
-            modifier = Modifier.widthIn(max = 340.dp)
+                containerColor = if (isUser) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant
+            )
         ) {
-            Column(modifier = Modifier.padding(12.dp)) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    modifier = Modifier.fillMaxWidth()
-                ) {
+            Column(Modifier.padding(horizontal = 14.dp, vertical = 11.dp)) {
+                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                     Text(
-                        text = if (isUser) "You" else "AI Assistant",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = if (isUser) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSecondaryContainer,
-                        fontWeight = FontWeight.Bold
+                        if (isUser) "You" else "Offline AI",
+                        style = MaterialTheme.typography.labelMedium,
+                        fontWeight = FontWeight.SemiBold,
+                        color = if (isUser) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.primary
                     )
-
                     if (!isUser) {
-                        Surface(
-                            shape = RoundedCornerShape(4.dp),
-                            color = if (message.mode == AssistantMode.CHAT) Color(0xFF2196F3) else Color(0xFFFF9800),
-                            modifier = Modifier.padding(start = 4.dp)
-                        ) {
-                            Text(
-                                text = if (message.mode == AssistantMode.CHAT) "CHAT" else "AGENT",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = Color.White,
-                                modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp)
-                            )
-                        }
+                        Spacer(Modifier.width(8.dp))
+                        AssistChip(
+                            onClick = {},
+                            enabled = false,
+                            label = { Text(if (message.mode == AssistantMode.CHAT) "CHAT" else "AGENT") },
+                            modifier = Modifier.height(28.dp)
+                        )
                     }
                 }
-
-                Spacer(Modifier.height(4.dp))
-                Text(
-                    text = message.text.ifBlank { "..." },
-                    style = MaterialTheme.typography.bodyMedium
-                )
+                Spacer(Modifier.height(6.dp))
+                Text(message.text.ifBlank { "…" }, style = MaterialTheme.typography.bodyMedium)
 
                 val patch: ParsedAiResponse? = message.parsedPatch
                 if (patch != null && message.mode == AssistantMode.AGENT) {
-                    Spacer(Modifier.height(8.dp))
-                    Card(
-                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Column(modifier = Modifier.padding(8.dp)) {
-                            Text(
-                                text = "Generated Operations (${patch.operations.size})",
-                                style = MaterialTheme.typography.labelMedium,
-                                fontWeight = FontWeight.Bold
-                            )
-                            Spacer(Modifier.height(4.dp))
-
+                    Spacer(Modifier.height(10.dp))
+                    Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
+                        Column(Modifier.padding(10.dp)) {
+                            Text("Generated operations (${patch.operations.size})", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.SemiBold)
+                            Spacer(Modifier.height(5.dp))
                             patch.operations.forEach { op ->
-                                val desc = getOpDescription(op)
-                                Text(
-                                    text = "• $desc",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = Color(0xFFFF9800)
-                                )
+                                Text("• ${getOpDescription(op)}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.tertiary)
                             }
-
                             Spacer(Modifier.height(8.dp))
-
                             if (message.isApplied) {
                                 Row(verticalAlignment = Alignment.CenterVertically) {
-                                    Icon(
-                                        Icons.Default.CheckCircle,
-                                        contentDescription = null,
-                                        tint = Color(0xFF4CAF50),
-                                        modifier = Modifier.size(16.dp)
-                                    )
-                                    Spacer(Modifier.width(4.dp))
-                                    Text("Applied to Project", style = MaterialTheme.typography.labelSmall, color = Color(0xFF4CAF50))
+                                    Icon(Icons.Default.CheckCircle, null, Modifier.size(17.dp), tint = MaterialTheme.colorScheme.secondary)
+                                    Spacer(Modifier.width(5.dp))
+                                    Text("Applied to project", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.secondary)
                                 }
                             } else {
-                                Button(
-                                    onClick = onApplyPatch,
-                                    modifier = Modifier.fillMaxWidth(),
-                                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFFF9800))
-                                ) {
-                                    Icon(Icons.Default.Build, contentDescription = null, modifier = Modifier.size(16.dp))
-                                    Spacer(Modifier.width(4.dp))
-                                    Text("Apply Changes to Project")
+                                Button(onClick = onApplyPatch, modifier = Modifier.fillMaxWidth()) {
+                                    Icon(Icons.Default.Build, null, Modifier.size(17.dp))
+                                    Spacer(Modifier.width(5.dp))
+                                    Text("Apply changes")
                                 }
                             }
                         }
@@ -380,12 +272,10 @@ fun ChatMessageBubble(
     }
 }
 
-private fun getOpDescription(op: FileOperation): String {
-    return when (op) {
-        is FileOperation.CreateFile -> "Create File: ${op.path}"
-        is FileOperation.ReplaceFile -> "Replace File: ${op.path}"
-        is FileOperation.ReplaceBlock -> "Update Block: ${op.path}"
-        is FileOperation.DeleteFile -> "Delete File: ${op.path}"
-        is FileOperation.CreateDirectory -> "Create Directory: ${op.path}"
-    }
+private fun getOpDescription(op: FileOperation): String = when (op) {
+    is FileOperation.CreateFile -> "Create: ${op.path}"
+    is FileOperation.ReplaceFile -> "Replace: ${op.path}"
+    is FileOperation.ReplaceBlock -> "Update: ${op.path}"
+    is FileOperation.DeleteFile -> "Delete: ${op.path}"
+    is FileOperation.CreateDirectory -> "Create directory: ${op.path}"
 }

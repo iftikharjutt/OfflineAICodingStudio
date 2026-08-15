@@ -7,16 +7,19 @@ import android.os.Build
 import android.os.Bundle
 import android.os.Environment
 import android.provider.Settings
+import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.*
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Build
+import androidx.compose.material.icons.filled.Chat
 import androidx.compose.material.icons.filled.Code
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Settings as SettingsIcon
+import androidx.compose.material.icons.filled.Storage
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
@@ -45,36 +48,18 @@ import com.offlineai.feature.terminal.TerminalViewModel
 import java.io.File
 
 class MainActivity : ComponentActivity() {
-
-    private val requestPermissionLauncher = registerForActivityResult(
-        ActivityResultContracts.RequestMultiplePermissions()
-    ) { _ -> }
+    private val requestPermissionLauncher = registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { _ -> }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-
-        // Request storage permissions for Android 10 and below
         if (Build.VERSION.SDK_INT <= Build.VERSION_CODES.Q) {
-            requestPermissionLauncher.launch(
-                arrayOf(
-                    Manifest.permission.READ_EXTERNAL_STORAGE,
-                    Manifest.permission.WRITE_EXTERNAL_STORAGE
-                )
-            )
+            requestPermissionLauncher.launch(arrayOf(Manifest.permission.READ_EXTERNAL_STORAGE, Manifest.permission.WRITE_EXTERNAL_STORAGE))
         }
-
-        // Request All Files Access for Android 11+
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-            if (!Environment.isExternalStorageManager()) {
-                try {
-                    val intent = Intent(Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION).apply {
-                        data = Uri.parse("package:$packageName")
-                    }
-                    startActivity(intent)
-                } catch (e: Exception) {
-                    val intent = Intent(Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION)
-                    startActivity(intent)
-                }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R && !Environment.isExternalStorageManager()) {
+            try {
+                startActivity(Intent(Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION).apply { data = Uri.parse("package:$packageName") })
+            } catch (_: Exception) {
+                startActivity(Intent(Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION))
             }
         }
 
@@ -90,16 +75,7 @@ class MainActivity : ComponentActivity() {
 
         setContent {
             OfflineAITheme {
-                AppShell(
-                    projectsViewModel = projectsViewModel,
-                    editorViewModel = editorViewModel,
-                    previewViewModel = previewViewModel,
-                    chatViewModel = chatViewModel,
-                    terminalViewModel = terminalViewModel,
-                    modelsViewModel = modelsViewModel,
-                    settingsViewModel = settingsViewModel,
-                    inferenceEngine = inferenceEngine
-                )
+                AppShell(projectsViewModel, editorViewModel, previewViewModel, chatViewModel, terminalViewModel, modelsViewModel, settingsViewModel, inferenceEngine)
             }
         }
     }
@@ -120,93 +96,76 @@ fun AppShell(
     var selectedDestination by remember { mutableStateOf<NavigationDestination>(NavigationDestination.Chat) }
     val activeProject by projectsViewModel.activeProject.collectAsState()
     val activeFilePath by projectsViewModel.activeFilePath.collectAsState()
-
-    // Load the selected GGUF model into the inference engine
     val selectedModel by modelsViewModel.selectedModel.collectAsState()
     val currentSettings by settingsViewModel.settings.collectAsState()
-    LaunchedEffect(selectedModel, currentSettings) {
-        selectedModel?.let { model ->
-            inferenceEngine.loadModel(
-                ModelLoadRequest(
-                    modelPath = model.path,
-                    contextSize = currentSettings.contextSize,
-                    threadCount = currentSettings.threadCount
-                )
-            )
+
+    LaunchedEffect(selectedModel?.path, currentSettings.contextSize, currentSettings.threadCount) {
+        val model = selectedModel
+        if (model == null) {
+            chatViewModel.setModelLoadState(null, ChatViewModel.ModelLoadState.Idle)
+            return@LaunchedEffect
+        }
+
+        chatViewModel.setModelLoadState(model.path, ChatViewModel.ModelLoadState.Loading)
+        val result = inferenceEngine.loadModel(ModelLoadRequest(modelPath = model.path, contextSize = currentSettings.contextSize, threadCount = currentSettings.threadCount))
+        result.onSuccess { session ->
+            chatViewModel.setModelLoadState(session.modelPath, ChatViewModel.ModelLoadState.Loaded)
+            Log.i("OfflineAICodingStudio", "Inference session ready: ${session.sessionId}")
+        }.onFailure { error ->
+            val message = error.message ?: "Unable to load GGUF model"
+            chatViewModel.setModelLoadState(model.path, ChatViewModel.ModelLoadState.Failed(message), message)
+            Log.e("OfflineAICodingStudio", "Unable to load selected GGUF model", error)
         }
     }
 
-    // Sync editor when active file changes
     LaunchedEffect(activeProject, activeFilePath) {
         val proj = activeProject
         val path = activeFilePath
-        if (proj != null && path != null) {
-            editorViewModel.loadFile(File(proj.path), path)
-        }
+        if (proj != null && path != null) editorViewModel.loadFile(File(proj.path), path)
     }
-
-    // Start local web preview server for active project
-    LaunchedEffect(activeProject) {
-        val proj = activeProject
-        if (proj != null) {
-            previewViewModel.startServerForProject(File(proj.path))
-        }
-    }
+    LaunchedEffect(activeProject) { activeProject?.let { previewViewModel.startServerForProject(File(it.path)) } }
 
     val destinations = listOf(
-        NavigationDestination.Chat to Icons.Default.Code,
+        NavigationDestination.Chat to Icons.Default.Chat,
         NavigationDestination.Projects to Icons.Default.Folder,
         NavigationDestination.Editor to Icons.Default.Code,
         NavigationDestination.Preview to Icons.Default.PlayArrow,
         NavigationDestination.Terminal to Icons.Default.Build,
-        NavigationDestination.Models to Icons.Default.Build,
-        NavigationDestination.Settings to Icons.Default.SettingsIcon,
+        NavigationDestination.Models to Icons.Default.Storage,
+        NavigationDestination.Settings to SettingsIcon
     )
 
     Scaffold(
+        containerColor = MaterialTheme.colorScheme.background,
         topBar = {
             TopAppBar(
-                title = { Text(selectedDestination.title) },
-                colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = MaterialTheme.colorScheme.primaryContainer,
-                    titleContentColor = MaterialTheme.colorScheme.onPrimaryContainer,
-                )
+                title = { Text(selectedDestination.title, style = MaterialTheme.typography.titleLarge) },
+                colors = TopAppBarDefaults.topAppBarColors(containerColor = MaterialTheme.colorScheme.surface, titleContentColor = MaterialTheme.colorScheme.onSurface)
             )
         },
         bottomBar = {
-            NavigationBar {
+            NavigationBar(containerColor = MaterialTheme.colorScheme.surface, tonalElevation = 4.dp) {
                 destinations.forEach { (destination, icon) ->
                     NavigationBarItem(
                         icon = { Icon(icon, contentDescription = destination.title) },
-                        label = { Text(destination.title) },
+                        label = null,
                         selected = selectedDestination == destination,
-                        onClick = { selectedDestination = destination }
+                        onClick = { selectedDestination = destination },
+                        alwaysShowLabel = false
                     )
                 }
             }
         }
     ) { paddingValues ->
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(paddingValues)
-                .padding(16.dp)
-        ) {
+        Box(Modifier.fillMaxSize().padding(paddingValues).padding(horizontal = 12.dp, vertical = 8.dp)) {
             when (selectedDestination) {
-                NavigationDestination.Chat -> ChatScreen(
-                    viewModel = chatViewModel,
-                    activeProjectDir = activeProject?.let { File(it.path) },
-                    selectedModelPath = selectedModel?.path
-                )
-                NavigationDestination.Projects -> ProjectsScreen(viewModel = projectsViewModel)
-                NavigationDestination.Editor -> EditorScreen(viewModel = editorViewModel)
-                NavigationDestination.Preview -> PreviewScreen(viewModel = previewViewModel)
-                NavigationDestination.Terminal -> TerminalScreen(
-                    viewModel = terminalViewModel,
-                    workingDir = activeProject?.let { File(it.path) }
-                )
-                NavigationDestination.Models -> ModelsScreen(viewModel = modelsViewModel)
-                NavigationDestination.Settings -> SettingsScreen(viewModel = settingsViewModel)
+                NavigationDestination.Chat -> ChatScreen(chatViewModel, activeProject?.let { File(it.path) }, selectedModel?.path)
+                NavigationDestination.Projects -> ProjectsScreen(projectsViewModel)
+                NavigationDestination.Editor -> EditorScreen(editorViewModel)
+                NavigationDestination.Preview -> PreviewScreen(previewViewModel)
+                NavigationDestination.Terminal -> TerminalScreen(terminalViewModel, activeProject?.let { File(it.path) })
+                NavigationDestination.Models -> ModelsScreen(modelsViewModel)
+                NavigationDestination.Settings -> SettingsScreen(settingsViewModel)
             }
         }
     }

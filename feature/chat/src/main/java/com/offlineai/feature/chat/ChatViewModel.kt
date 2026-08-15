@@ -38,6 +38,13 @@ class ChatViewModel(
     private val inferenceEngine: LlamaInferenceEngine
 ) : ViewModel() {
 
+    sealed class ModelLoadState {
+        data object Idle : ModelLoadState()
+        data object Loading : ModelLoadState()
+        data object Loaded : ModelLoadState()
+        data class Failed(val message: String) : ModelLoadState()
+    }
+
     private val executor = AgenticPatchExecutor(workspaceManager)
     private val conversationManager = ConversationManager(maxTurnsHistory = 10)
 
@@ -50,7 +57,20 @@ class ChatViewModel(
     private val _isGenerating = MutableStateFlow(false)
     val isGenerating: StateFlow<Boolean> = _isGenerating.asStateFlow()
 
+    private val _modelLoadState = MutableStateFlow<ModelLoadState>(ModelLoadState.Idle)
+    val modelLoadState: StateFlow<ModelLoadState> = _modelLoadState.asStateFlow()
+
+    private val _modelLoadError = MutableStateFlow<String?>(null)
+    val modelLoadError: StateFlow<String?> = _modelLoadError.asStateFlow()
+
     var activeSessionModelPath: String? = null
+        private set
+
+    fun setModelLoadState(path: String?, state: ModelLoadState, error: String? = null) {
+        activeSessionModelPath = if (state is ModelLoadState.Loaded) path else null
+        _modelLoadState.value = state
+        _modelLoadError.value = error ?: (state as? ModelLoadState.Failed)?.message
+    }
 
     fun setMode(mode: AssistantMode) {
         _activeMode.value = mode
@@ -64,13 +84,23 @@ class ChatViewModel(
 
     fun sendMessage(userText: String, activeProjectDir: File?, modelPath: String? = null) {
         require(userText.isNotBlank()) { "User request text cannot be blank" }
+        if (_isGenerating.value) {
+            Log.w("ChatViewModel", "Ignoring sendMessage while another generation is active.")
+            return
+        }
+        if (_modelLoadState.value !is ModelLoadState.Loaded) {
+            Log.w("ChatViewModel", "Ignoring sendMessage because no model session is ready: ${_modelLoadState.value}")
+            return
+        }
 
-        // Resolve modelPath to ensure fallback to activeSessionModelPath if parameter is null
-        val effectiveModelPath = modelPath ?: activeSessionModelPath
+        val effectiveModelPath = activeSessionModelPath ?: modelPath
+        if (effectiveModelPath == null) {
+            Log.w("ChatViewModel", "Ignoring sendMessage because no loaded model path is available.")
+            return
+        }
 
         val currentMode = _activeMode.value
         val userMsg = ChatMessage(sender = "user", text = userText, mode = currentMode)
-
         val assistantMsgId = java.util.UUID.randomUUID().toString()
         val assistantPlaceholder = ChatMessage(
             id = assistantMsgId,
@@ -89,42 +119,42 @@ class ChatViewModel(
 
             try {
                 val fullPrompt = if (currentMode == AssistantMode.CHAT) {
-                    val chatContext = ChatPromptContext(
-                        conversationHistory = conversationManager.getHistoryPairs(),
-                        userRequest = userText,
-                        modelPath = effectiveModelPath
+                    ChatPromptBuilder.buildPrompt(
+                        ChatPromptContext(
+                            conversationHistory = conversationManager.getHistoryPairs(),
+                            userRequest = userText,
+                            modelPath = effectiveModelPath
+                        )
                     )
-                    ChatPromptBuilder.buildPrompt(chatContext)
                 } else {
-                    val fileTree = if (activeProjectDir != null) {
-                        workspaceManager.getFileTree(activeProjectDir).children.map { it.path }
-                    } else emptyList()
+                    val fileTree = activeProjectDir?.let {
+                        workspaceManager.getFileTree(it).children.map { child -> child.path }
+                    } ?: emptyList()
+                    val activeContent = activeProjectDir?.let {
+                        runCatching { workspaceManager.readFileText(it, "index.html") }.getOrNull()
+                    }
 
-                    val activeContent = if (activeProjectDir != null) {
-                        try {
-                            workspaceManager.readFileText(activeProjectDir, "index.html")
-                        } catch (e: Exception) { null }
-                    } else null
-
-                    val agentContext = AgentPromptContext(
-                        projectSummary = activeProjectDir?.name ?: "Web Project",
-                        fileTree = fileTree,
-                        activeFile = "index.html",
-                        activeFileContent = activeContent,
-                        conversationHistory = conversationManager.getHistoryPairs(),
-                        userRequest = userText,
-                        modelPath = effectiveModelPath
+                    AgentPromptBuilder.buildPrompt(
+                        AgentPromptContext(
+                            projectSummary = activeProjectDir?.name ?: "Web Project",
+                            fileTree = fileTree,
+                            activeFile = "index.html",
+                            activeFileContent = activeContent,
+                            conversationHistory = conversationManager.getHistoryPairs(),
+                            userRequest = userText,
+                            modelPath = effectiveModelPath
+                        )
                     )
-                    AgentPromptBuilder.buildPrompt(agentContext)
                 }
 
                 val family = ModelTemplateDetector.detectFamily(effectiveModelPath)
                 val stopTokens = ModelTemplateDetector.getStopTokens(family)
-
-                Log.i("ChatViewModel", "Starting inference: mode=$currentMode, family=$family, effectiveModelPath=$effectiveModelPath, promptLen=${fullPrompt.length}")
+                Log.i(
+                    "ChatViewModel",
+                    "Starting inference: mode=$currentMode, family=$family, model=$effectiveModelPath, promptLen=${fullPrompt.length}"
+                )
 
                 val startTime = System.currentTimeMillis()
-
                 inferenceEngine.streamCompletion(
                     CompletionRequest(
                         sessionId = "chat-session",
@@ -135,6 +165,8 @@ class ChatViewModel(
                         modelPath = effectiveModelPath
                     )
                 ).collect { event ->
+                    if (generationFailed) return@collect
+
                     when (event) {
                         is TokenEvent.Token -> {
                             tokenCount++
@@ -142,64 +174,66 @@ class ChatViewModel(
                             updateAssistantMessageText(assistantMsgId, responseBuilder.toString())
                         }
                         is TokenEvent.Error -> {
-                            Log.e("ChatViewModel", "Inference error: ${event.throwable.message}", event.throwable)
-                            val errorText = "Inference Error: ${event.throwable.message}"
-                            updateAssistantMessageText(assistantMsgId, errorText)
-                            _isGenerating.value = false
                             generationFailed = true
-                            return@collect
+                            Log.e("ChatViewModel", "Inference error: ${event.throwable.message}", event.throwable)
+                            updateAssistantMessageText(
+                                assistantMsgId,
+                                "Inference Error: ${event.throwable.message ?: "Unknown inference error"}"
+                            )
+                            _isGenerating.value = false
                         }
                         is TokenEvent.Completed -> {
-                            val elapsed = System.currentTimeMillis() - startTime
-                            Log.i("ChatViewModel", "Inference completed: tokens=$tokenCount, elapsed=${elapsed}ms")
+                            Log.i(
+                                "ChatViewModel",
+                                "Inference completed: tokens=$tokenCount, elapsed=${System.currentTimeMillis() - startTime}ms"
+                            )
                         }
                         is TokenEvent.Cancelled -> {
+                            generationFailed = true
                             Log.w("ChatViewModel", "Inference cancelled")
                             _isGenerating.value = false
-                            generationFailed = true
-                            return@collect
                         }
                     }
                 }
             } catch (e: Exception) {
+                generationFailed = true
                 Log.e("ChatViewModel", "Uncaught exception in sendMessage: ${e.message}", e)
-                updateAssistantMessageText(assistantMsgId, "Inference Error: ${e.message}")
+                updateAssistantMessageText(assistantMsgId, "Inference Error: ${e.message ?: "Unknown error"}")
+                _isGenerating.value = false
+            }
+
+            if (generationFailed) return@launch
+
+            val rawResponse = responseBuilder.toString()
+            if (tokenCount == 0) {
+                Log.e("ChatViewModel", "Inference completed with zero generated tokens")
+                updateAssistantMessageText(
+                    assistantMsgId,
+                    "Inference Failed: zero tokens were generated. Check the selected GGUF model and native logcat output."
+                )
                 _isGenerating.value = false
                 return@launch
             }
 
-            if (!generationFailed) {
-                val rawResponse = responseBuilder.toString()
-
-                if (tokenCount == 0) {
-                    Log.e("ChatViewModel", "Inference failed: Zero tokens generated")
-                    updateAssistantMessageText(assistantMsgId, "Inference Failed: Zero tokens generated by GGUF model. Please check the logs.")
-                    _isGenerating.value = false
-                    return@launch
-                } else if (rawResponse.isBlank()) {
-                    Log.w("ChatViewModel", "Inference completed but response was entirely whitespace/blank.")
-                    updateAssistantMessageText(assistantMsgId, "Inference completed, but the model generated an empty or whitespace response. Try adjusting your prompt.")
-                    _isGenerating.value = false
-                    return@launch
-                }
-
-                if (currentMode == AssistantMode.AGENT) {
-                    val parseResult = FileOperationParser.parseJsonResponse(rawResponse)
-                    val parsedPatch = parseResult.getOrNull()
-                    val hasOps = parsedPatch != null && parsedPatch.operations.isNotEmpty()
-
-                    val summaryText = if (parsedPatch != null && parsedPatch.summary.isNotBlank()) {
-                        parsedPatch.summary
-                    } else {
-                        rawResponse
-                    }
-
-                    updateAssistantMessagePatch(assistantMsgId, summaryText, if (hasOps) parsedPatch else null)
-                }
-
-                conversationManager.addTurn(userText, rawResponse)
+            if (rawResponse.isBlank()) {
+                updateAssistantMessageText(
+                    assistantMsgId,
+                    "Inference completed, but the model generated an empty response."
+                )
                 _isGenerating.value = false
+                return@launch
             }
+
+            if (currentMode == AssistantMode.AGENT) {
+                val parseResult = FileOperationParser.parseJsonResponse(rawResponse)
+                val parsedPatch = parseResult.getOrNull()
+                val hasOps = parsedPatch?.operations?.isNotEmpty() == true
+                val summaryText = if (parsedPatch?.summary?.isNotBlank() == true) parsedPatch.summary else rawResponse
+                updateAssistantMessagePatch(assistantMsgId, summaryText, if (hasOps) parsedPatch else null)
+            }
+
+            conversationManager.addTurn(userText, rawResponse)
+            _isGenerating.value = false
         }
     }
 
@@ -216,10 +250,7 @@ class ChatViewModel(
         val list = _messages.value.toMutableList()
         val index = list.indexOfFirst { it.id == messageId }
         if (index != -1) {
-            list[index] = list[index].copy(
-                text = summaryText,
-                parsedPatch = patch
-            )
+            list[index] = list[index].copy(text = summaryText, parsedPatch = patch)
             _messages.value = list
         }
     }
