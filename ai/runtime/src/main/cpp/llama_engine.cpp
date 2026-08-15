@@ -5,6 +5,8 @@
 #include <cstring>
 #include <algorithm>
 #include <android/log.h>
+#include <mutex>
+#include <unistd.h>
 #include "llama.h"
 
 #define TAG "llama_engine_native_cpp"
@@ -20,6 +22,7 @@ struct SessionState {
     int            last_batch_n = 0;
 };
 static std::map<std::string, SessionState> g_sessions;
+static std::mutex g_sessions_mutex;
 
 static void batch_clear(llama_batch& b){ b.n_tokens = 0; }
 static void batch_add(llama_batch& b, llama_token t, llama_pos p, bool logits){
@@ -96,6 +99,13 @@ Java_com_offlineai_ai_runtime_LlamaEngineNative_nativeInit(JNIEnv*, jobject){
     return JNI_TRUE;
 }
 
+JNIEXPORT jlong JNICALL
+Java_com_offlineai_ai_runtime_LlamaEngineNative_nativeGetAvailableRAM(JNIEnv*, jobject){
+    long pages = sysconf(_SC_AVPHYS_PAGES);
+    long page_size = sysconf(_SC_PAGE_SIZE);
+    return (jlong)(pages * page_size);
+}
+
 JNIEXPORT jstring JNICALL
 Java_com_offlineai_ai_runtime_LlamaEngineNative_nativeLoadModel(
         JNIEnv* env, jobject, jstring jpath, jint ctxSize, jint threads){
@@ -124,8 +134,14 @@ Java_com_offlineai_ai_runtime_LlamaEngineNative_nativeLoadModel(
     }
 
     SessionState st; st.model = model; st.ctx = ctx;
-    std::string id = "session_" + std::to_string(g_sessions.size() + 1);
-    g_sessions[id] = st;
+    
+    std::string id;
+    {
+        std::lock_guard<std::mutex> lock(g_sessions_mutex);
+        id = "session_" + std::to_string(g_sessions.size() + 1);
+        g_sessions[id] = st;
+    }
+    
     LOGI("nativeLoadModel success: assigned sessionID=%s", id.c_str());
     return env->NewStringUTF(id.c_str());
 }
@@ -137,6 +153,8 @@ Java_com_offlineai_ai_runtime_LlamaEngineNative_nativeUnloadModel(
     std::string id(cid);
     env->ReleaseStringUTFChars(jid, cid);
     LOGI("nativeUnloadModel called for session=%s", id.c_str());
+    
+    std::lock_guard<std::mutex> lock(g_sessions_mutex);
     auto it = g_sessions.find(id);
     if (it == g_sessions.end()) return JNI_FALSE;
     if (it->second.ctx)   llama_free(it->second.ctx);
@@ -151,12 +169,19 @@ Java_com_offlineai_ai_runtime_LlamaEngineNative_nativeGenerateToken(
     const char* cid = env->GetStringUTFChars(jid, nullptr);
     std::string id(cid);
     env->ReleaseStringUTFChars(jid, cid);
-    auto it = g_sessions.find(id);
-    if (it == g_sessions.end()) {
-        LOGE("nativeGenerateToken: Session %s not found", id.c_str());
-        return env->NewStringUTF("");
+    
+    SessionState* st_ptr = nullptr;
+    {
+        std::lock_guard<std::mutex> lock(g_sessions_mutex);
+        auto it = g_sessions.find(id);
+        if (it == g_sessions.end()) {
+            LOGE("nativeGenerateToken: Session %s not found", id.c_str());
+            return env->NewStringUTF("");
+        }
+        st_ptr = &(it->second);
     }
-    SessionState& st = it->second;
+    
+    SessionState& st = *st_ptr;
 
     if (isFirstToken){
         st.prompt_evaluated = false;

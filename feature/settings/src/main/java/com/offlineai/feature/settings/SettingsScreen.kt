@@ -56,6 +56,55 @@ fun SettingsScreen(
             }
         }
 
+        Card(
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Column(modifier = Modifier.padding(16.dp)) {
+                Text("Custom AI Persona (System Prompt)", style = MaterialTheme.typography.titleMedium)
+                Spacer(Modifier.height(8.dp))
+
+                OutlinedTextField(
+                    value = settings.systemPrompt,
+                    onValueChange = { viewModel.updateSystemPrompt(it) },
+                    modifier = Modifier.fillMaxWidth().height(120.dp),
+                    textStyle = MaterialTheme.typography.bodySmall,
+                    label = { Text("System Prompt") }
+                )
+            }
+        }
+
+        // Model Roles Config
+        Card(
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Column(modifier = Modifier.padding(16.dp)) {
+                Text("AI Model Roles", style = MaterialTheme.typography.titleMedium)
+                Spacer(Modifier.height(8.dp))
+                
+                Text("Architect & Coder: Model A", style = MaterialTheme.typography.bodyMedium)
+                Text("By default, the primary model handles planning and code generation.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                
+                Spacer(Modifier.height(16.dp))
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text("Use Model B for Review & Debug")
+                        Text("Offload code review and console error fixing to the secondary model.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                    Switch(
+                        checked = settings.useModelBForReviewAndDebug,
+                        onCheckedChange = { viewModel.toggleUseModelB(it) }
+                    )
+                }
+            }
+        }
+
         // Editor & UI Config
         Card(
             colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),

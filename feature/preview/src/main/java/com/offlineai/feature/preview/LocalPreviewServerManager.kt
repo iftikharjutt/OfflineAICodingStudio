@@ -13,10 +13,12 @@ import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 
 class LocalPreviewServerManager(
-    private var projectDir: File,
-    private val port: Int = 8080
+    private var projectDir: File
 ) {
     private var serverSocket: ServerSocket? = null
+    var activePort: Int = -1
+        private set
+
     private var isRunning = false
     private val threadPool: ExecutorService = Executors.newFixedThreadPool(4)
 
@@ -27,7 +29,8 @@ class LocalPreviewServerManager(
     suspend fun startServer() = withContext(Dispatchers.IO) {
         if (isRunning) return@withContext
         try {
-            serverSocket = ServerSocket(port)
+            serverSocket = ServerSocket(0)
+            activePort = serverSocket?.localPort ?: -1
             isRunning = true
             while (isRunning && serverSocket?.isClosed == false) {
                 val clientSocket = serverSocket?.accept() ?: break

@@ -16,7 +16,8 @@ data class GgufModelInfo(
     val name: String,
     val path: String,
     val sizeBytes: Long,
-    val isSelected: Boolean = false
+    val isSelectedA: Boolean = false,
+    val isSelectedB: Boolean = false
 )
 
 class ModelsViewModel(
@@ -26,8 +27,11 @@ class ModelsViewModel(
     private val _availableModels = MutableStateFlow<List<GgufModelInfo>>(emptyList())
     val availableModels: StateFlow<List<GgufModelInfo>> = _availableModels.asStateFlow()
 
-    private val _selectedModel = MutableStateFlow<GgufModelInfo?>(null)
-    val selectedModel: StateFlow<GgufModelInfo?> = _selectedModel.asStateFlow()
+    private val _selectedModelA = MutableStateFlow<GgufModelInfo?>(null)
+    val selectedModelA: StateFlow<GgufModelInfo?> = _selectedModelA.asStateFlow()
+
+    private val _selectedModelB = MutableStateFlow<GgufModelInfo?>(null)
+    val selectedModelB: StateFlow<GgufModelInfo?> = _selectedModelB.asStateFlow()
 
     private val _scanMessage = MutableStateFlow("")
     val scanMessage: StateFlow<String> = _scanMessage.asStateFlow()
@@ -75,19 +79,20 @@ class ModelsViewModel(
                         name = f.name,
                         path = f.absolutePath,
                         sizeBytes = f.length(),
-                        isSelected = (_selectedModel.value?.path == f.absolutePath)
+                        isSelectedA = (_selectedModelA.value?.path == f.absolutePath),
+                        isSelectedB = (_selectedModelB.value?.path == f.absolutePath)
                     )
                 }
 
                 _availableModels.value = list
-                if (list.isNotEmpty() && (_selectedModel.value == null || list.none { it.isSelected })) {
-                    val defaultModel = list.first().copy(isSelected = true)
-                    _selectedModel.value = defaultModel
-                    _availableModels.value = list.map { it.copy(isSelected = (it.path == defaultModel.path)) }
+                if (list.isNotEmpty() && (_selectedModelA.value == null || list.none { it.isSelectedA })) {
+                    val defaultModel = list.first().copy(isSelectedA = true)
+                    _selectedModelA.value = defaultModel
+                    _availableModels.value = list.map { it.copy(isSelectedA = (it.path == defaultModel.path)) }
                 }
 
                 _scanMessage.value = if (list.isNotEmpty()) {
-                    "Found ${list.size} model(s)! Selected: ${list.firstOrNull { it.isSelected }?.name ?: list.first().name}"
+                    "Found ${list.size} model(s)! Selected A: ${list.firstOrNull { it.isSelectedA }?.name ?: list.first().name}"
                 } else {
                     "Scanned 6 storage locations. Please grant Storage Permission or place .gguf in Downloads."
                 }
@@ -95,10 +100,24 @@ class ModelsViewModel(
         }
     }
 
-    fun selectModel(model: GgufModelInfo) {
-        _selectedModel.value = model.copy(isSelected = true)
+    fun selectModelA(model: GgufModelInfo) {
+        _selectedModelA.value = model.copy(isSelectedA = true)
+        updateList()
+    }
+
+    fun selectModelB(model: GgufModelInfo) {
+        _selectedModelB.value = model.copy(isSelectedB = true)
+        updateList()
+    }
+
+    private fun updateList() {
+        val aPath = _selectedModelA.value?.path
+        val bPath = _selectedModelB.value?.path
         _availableModels.value = _availableModels.value.map {
-            it.copy(isSelected = (it.path == model.path))
+            it.copy(
+                isSelectedA = (it.path == aPath),
+                isSelectedB = (it.path == bPath)
+            )
         }
     }
 }

@@ -12,8 +12,7 @@ import com.offlineai.ai.prompting.ConversationManager
 import com.offlineai.ai.prompting.FileOperationParser
 import com.offlineai.ai.prompting.ModelTemplateDetector
 import com.offlineai.ai.prompting.ParsedAiResponse
-import com.offlineai.ai.runtime.CompletionRequest
-import com.offlineai.ai.runtime.LlamaInferenceEngine
+import com.offlineai.ai.runtime.DualModelManager
 import com.offlineai.ai.runtime.TokenEvent
 import com.offlineai.core.filesystem.WorkspaceManager
 import com.offlineai.core.models.AssistantMode
@@ -30,16 +29,18 @@ data class ChatMessage(
     val timestamp: Long = System.currentTimeMillis(),
     val mode: AssistantMode = AssistantMode.CHAT,
     val parsedPatch: ParsedAiResponse? = null,
-    val isApplied: Boolean = false
+    val isApplied: Boolean = false,
+    val textB: String? = null
 )
 
 class ChatViewModel(
     private val workspaceManager: WorkspaceManager,
-    private val inferenceEngine: LlamaInferenceEngine
+    private val dualManager: DualModelManager
 ) : ViewModel() {
 
     private val executor = AgenticPatchExecutor(workspaceManager)
     private val conversationManager = ConversationManager(maxTurnsHistory = 10)
+    private val gameOrchestrator = com.offlineai.ai.agent.GameOrchestrator(workspaceManager, dualManager)
 
     private val _activeMode = MutableStateFlow(AssistantMode.CHAT)
     val activeMode: StateFlow<AssistantMode> = _activeMode.asStateFlow()
@@ -50,7 +51,18 @@ class ChatViewModel(
     private val _isGenerating = MutableStateFlow(false)
     val isGenerating: StateFlow<Boolean> = _isGenerating.asStateFlow()
 
+    private val _isMemoryEnabled = MutableStateFlow(true)
+    val isMemoryEnabled: StateFlow<Boolean> = _isMemoryEnabled.asStateFlow()
+
+
     var activeSessionModelPath: String? = null
+    
+    private val _isDualModeEnabled = MutableStateFlow(false)
+    val isDualModeEnabled: StateFlow<Boolean> = _isDualModeEnabled.asStateFlow()
+
+    fun toggleDualMode(enabled: Boolean) {
+        _isDualModeEnabled.value = enabled
+    }
 
     fun setMode(mode: AssistantMode) {
         _activeMode.value = mode
@@ -62,7 +74,12 @@ class ChatViewModel(
         Log.i("ChatViewModel", "Conversation history cleared.")
     }
 
-    fun sendMessage(userText: String, activeProjectDir: File?, modelPath: String? = null) {
+    fun toggleMemory(enabled: Boolean) {
+        _isMemoryEnabled.value = enabled
+    }
+
+
+    fun sendMessage(userText: String, activeProjectDir: File?, modelPath: String? = null, systemPrompt: String? = null) {
         require(userText.isNotBlank()) { "User request text cannot be blank" }
 
         // Resolve modelPath to ensure fallback to activeSessionModelPath if parameter is null
@@ -88,9 +105,22 @@ class ChatViewModel(
             var generationFailed = false
 
             try {
+                if (currentMode == AssistantMode.GAME_STUDIO) {
+                    val projectName = "OfflineGame_${System.currentTimeMillis()}"
+                    gameOrchestrator.runGameGenerationPipeline(userText, projectName).collect { status ->
+                        responseBuilder.append(status).append("\n")
+                        updateAssistantMessageText(assistantMsgId, responseBuilder.toString(), null)
+                    }
+                    _isGenerating.value = false
+                    return@launch
+                }
+
+                val history = if (_isMemoryEnabled.value) conversationManager.getHistoryPairs() else emptyList()
+
                 val fullPrompt = if (currentMode == AssistantMode.CHAT) {
                     val chatContext = ChatPromptContext(
-                        conversationHistory = conversationManager.getHistoryPairs(),
+                        systemPrompt = systemPrompt ?: ChatPromptContext.DEFAULT_CHAT_SYSTEM_PROMPT,
+                        conversationHistory = history,
                         userRequest = userText,
                         modelPath = effectiveModelPath
                     )
@@ -111,10 +141,12 @@ class ChatViewModel(
                         fileTree = fileTree,
                         activeFile = "index.html",
                         activeFileContent = activeContent,
-                        conversationHistory = conversationManager.getHistoryPairs(),
+                        conversationHistory = history,
                         userRequest = userText,
                         modelPath = effectiveModelPath
                     )
+                    // We can optionally use systemPrompt if AgentPromptBuilder supported it, but let's just stick to the context for Chat for now, 
+                    // or override it in AgentPromptContext if needed. For now, Agent uses a strict JSON instruction.
                     AgentPromptBuilder.buildPrompt(agentContext)
                 }
 
@@ -125,45 +157,86 @@ class ChatViewModel(
 
                 val startTime = System.currentTimeMillis()
 
-                inferenceEngine.streamCompletion(
-                    CompletionRequest(
-                        sessionId = "chat-session",
-                        prompt = fullPrompt,
-                        maxTokens = 2048,
-                        temperature = if (currentMode == AssistantMode.CHAT) 0.7f else 0.2f,
-                        stopSequences = stopTokens,
-                        modelPath = effectiveModelPath
-                    )
-                ).collect { event ->
-                    when (event) {
-                        is TokenEvent.Token -> {
-                            tokenCount++
-                            responseBuilder.append(event.text)
-                            updateAssistantMessageText(assistantMsgId, responseBuilder.toString())
+                val reqStartTime = System.currentTimeMillis()
+                
+                if (_isDualModeEnabled.value && dualManager.sessionA != null && dualManager.sessionB != null) {
+                    // Collaborative Review Mode
+                    var generationFailedA = false
+                    
+                    try {
+                        dualManager.streamModelA(fullPrompt, maxTokens = 2048, stopTokens = stopTokens).collect { event ->
+                            when (event) {
+                                is TokenEvent.Token -> {
+                                    responseBuilder.append(event.text)
+                                    updateAssistantMessageText(assistantMsgId, "Model A Drafting...\n\n${responseBuilder.toString()}", null)
+                                }
+                                is TokenEvent.Error -> generationFailedA = true
+                                is TokenEvent.Completed -> {}
+                                is TokenEvent.Cancelled -> generationFailedA = true
+                            }
                         }
-                        is TokenEvent.Error -> {
-                            Log.e("ChatViewModel", "Inference error: ${event.throwable.message}", event.throwable)
-                            val errorText = "Inference Error: ${event.throwable.message}"
-                            updateAssistantMessageText(assistantMsgId, errorText)
-                            _isGenerating.value = false
+                    } catch(e: Exception) { generationFailedA = true }
+                    
+                    if (generationFailedA || responseBuilder.isEmpty()) {
+                        generationFailed = true
+                    } else {
+                        // Model B Reviews
+                        val reviewPrompt = "You are an expert AI code reviewer. Please review, fix any bugs, and improve the following response. Output the final polished version directly.\n\nOriginal Response:\n${responseBuilder.toString()}\n\nPolished Version:\n"
+                        val responseBuilderB = StringBuilder()
+                        var generationFailedB = false
+                        
+                        try {
+                            dualManager.streamModelB(reviewPrompt, maxTokens = 2048, stopTokens = stopTokens).collect { event ->
+                                when (event) {
+                                    is TokenEvent.Token -> {
+                                        responseBuilderB.append(event.text)
+                                        updateAssistantMessageText(assistantMsgId, "Model B Refining...\n\n${responseBuilderB.toString()}", null)
+                                    }
+                                    is TokenEvent.Error -> generationFailedB = true
+                                    is TokenEvent.Completed -> {}
+                                    is TokenEvent.Cancelled -> generationFailedB = true
+                                }
+                            }
+                        } catch(e: Exception) { generationFailedB = true }
+                        
+                        if (!generationFailedB) {
+                            responseBuilder.clear()
+                            responseBuilder.append(responseBuilderB.toString())
+                            tokenCount = responseBuilder.length
+                        } else {
                             generationFailed = true
-                            return@collect
                         }
-                        is TokenEvent.Completed -> {
-                            val elapsed = System.currentTimeMillis() - startTime
-                            Log.i("ChatViewModel", "Inference completed: tokens=$tokenCount, elapsed=${elapsed}ms")
-                        }
-                        is TokenEvent.Cancelled -> {
-                            Log.w("ChatViewModel", "Inference cancelled")
-                            _isGenerating.value = false
-                            generationFailed = true
-                            return@collect
+                    }
+                } else {
+                    // Single Mode
+                    val flow = if (dualManager.sessionA != null) {
+                        dualManager.streamModelA(fullPrompt, maxTokens = 2048, stopTokens = stopTokens)
+                    } else if (dualManager.sessionB != null) {
+                        dualManager.streamModelB(fullPrompt, maxTokens = 2048, stopTokens = stopTokens)
+                    } else {
+                        throw IllegalStateException("No models loaded in DualModelManager")
+                    }
+                    
+                    flow.collect { event ->
+                        when (event) {
+                            is TokenEvent.Token -> {
+                                tokenCount++
+                                responseBuilder.append(event.text)
+                                updateAssistantMessageText(assistantMsgId, responseBuilder.toString(), null)
+                            }
+                            is TokenEvent.Error -> {
+                                Log.e("ChatViewModel", "Inference error: ${event.throwable.message}", event.throwable)
+                                updateAssistantMessageText(assistantMsgId, "Inference Error: ${event.throwable.message}", null)
+                                generationFailed = true
+                            }
+                            is TokenEvent.Completed -> {}
+                            is TokenEvent.Cancelled -> generationFailed = true
                         }
                     }
                 }
             } catch (e: Exception) {
                 Log.e("ChatViewModel", "Uncaught exception in sendMessage: ${e.message}", e)
-                updateAssistantMessageText(assistantMsgId, "Inference Error: ${e.message}")
+                updateAssistantMessageText(assistantMsgId, "Inference Error: ${e.message}", null)
                 _isGenerating.value = false
                 return@launch
             }
@@ -173,12 +246,25 @@ class ChatViewModel(
 
                 if (tokenCount == 0) {
                     Log.e("ChatViewModel", "Inference failed: Zero tokens generated")
-                    updateAssistantMessageText(assistantMsgId, "Inference Failed: Zero tokens generated by GGUF model. Please check the logs.")
+                    updateAssistantMessageText(assistantMsgId, "Inference Failed: Zero tokens generated by GGUF model. Please check the logs.", null)
                     _isGenerating.value = false
                     return@launch
                 } else if (rawResponse.isBlank()) {
                     Log.w("ChatViewModel", "Inference completed but response was entirely whitespace/blank.")
-                    updateAssistantMessageText(assistantMsgId, "Inference completed, but the model generated an empty or whitespace response. Try adjusting your prompt.")
+                    updateAssistantMessageText(assistantMsgId, "Inference completed, but the model generated an empty or whitespace response. Try adjusting your prompt.", null)
+                    _isGenerating.value = false
+                    return@launch
+                } else if (isRepetitiveNonsense(rawResponse)) {
+                    Log.w("ChatViewModel", "Inference produced repetitive nonsense.")
+                    updateAssistantMessageText(assistantMsgId, "The AI encountered a generation loop and produced repetitive text. Please try modifying your prompt or restarting the chat.", null)
+                    _isGenerating.value = false
+                    return@launch
+                }
+                
+                val historyPairs = conversationManager.getHistoryPairs()
+                if (historyPairs.isNotEmpty() && historyPairs.last().second.trim() == rawResponse.trim()) {
+                    Log.w("ChatViewModel", "Inference produced the exact same response as last time.")
+                    updateAssistantMessageText(assistantMsgId, "The AI generated the exact same response as before. Please try rephrasing your prompt to break the loop.", null)
                     _isGenerating.value = false
                     return@launch
                 }
@@ -203,11 +289,11 @@ class ChatViewModel(
         }
     }
 
-    private fun updateAssistantMessageText(messageId: String, newText: String) {
+    private fun updateAssistantMessageText(messageId: String, newText: String, newTextB: String?) {
         val list = _messages.value.toMutableList()
         val index = list.indexOfFirst { it.id == messageId }
         if (index != -1) {
-            list[index] = list[index].copy(text = newText)
+            list[index] = list[index].copy(text = newText, textB = newTextB)
             _messages.value = list
         }
     }
@@ -241,5 +327,51 @@ class ChatViewModel(
                 }
             }
         }
+    }
+
+    fun createProjectFromChatCode(messageId: String, onProjectCreated: () -> Unit = {}) {
+        viewModelScope.launch {
+            val list = _messages.value.toMutableList()
+            val index = list.indexOfFirst { it.id == messageId }
+            if (index != -1) {
+                val msg = list[index]
+                val rawText = msg.text
+                
+                val regex = Regex("```(?:[a-zA-Z]*)\\n([\\s\\S]*?)```")
+                val match = regex.find(rawText)
+                val codeSnippet = match?.groupValues?.get(1) ?: rawText
+
+                val isWeb = codeSnippet.contains("<!DOCTYPE html>") || codeSnippet.contains("<html>") || codeSnippet.contains("<body>")
+                val projectName = "AIGeneratedProject_${System.currentTimeMillis()}"
+                
+                val baseDir = File(workspaceManager.projectsDir, projectName)
+                if (!baseDir.exists()) {
+                    baseDir.mkdirs()
+                }
+
+                if (isWeb) {
+                    File(baseDir, "index.html").writeText(codeSnippet)
+                } else {
+                    File(baseDir, "MainActivity.kt").writeText(codeSnippet)
+                }
+                
+                list[index] = msg.copy(
+                    text = msg.text + "\n\n✅ Transferred to Projects Tab: $projectName"
+                )
+                _messages.value = list
+                onProjectCreated()
+            }
+        }
+    }
+    
+    private fun isRepetitiveNonsense(text: String): Boolean {
+        if (text.length < 100) return false
+        val words = text.split(Regex("\\s+")).filter { it.isNotBlank() }
+        if (words.size > 50) {
+            val last50 = words.takeLast(50)
+            val uniqueInLast50 = last50.distinct().size
+            if (uniqueInLast50 < 10) return true
+        }
+        return false
     }
 }

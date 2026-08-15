@@ -6,6 +6,9 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.withContext
 import java.io.File
+import java.io.FileOutputStream
+import java.util.zip.ZipEntry
+import java.util.zip.ZipOutputStream
 
 class WorkspaceManager(private val baseDir: File) {
 
@@ -36,6 +39,16 @@ class WorkspaceManager(private val baseDir: File) {
         if (!projDir.exists()) {
             projDir.mkdirs()
         }
+        
+        // Game Studio Architecture Directories
+        File(projDir, "css").mkdirs()
+        File(projDir, "js").mkdirs()
+        File(projDir, "assets/images").mkdirs()
+        File(projDir, "assets/audio").mkdirs()
+        File(projDir, "assets/fonts").mkdirs()
+        val gsDir = File(projDir, ".gamestudio")
+        gsDir.mkdirs()
+
         // Initialize default web starter files
         File(projDir, "index.html").writeText("""
 <!DOCTYPE html>
@@ -44,33 +57,66 @@ class WorkspaceManager(private val baseDir: File) {
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>$projectName</title>
-    <link rel="stylesheet" href="style.css">
+    <link rel="stylesheet" href="css/style.css">
 </head>
 <body>
-    <h1>Welcome to $projectName</h1>
-    <p>Created with Offline AI Coding Studio.</p>
-    <script src="script.js"></script>
+    <div id="game-container">
+        <canvas id="gameCanvas" width="800" height="600"></canvas>
+    </div>
+    <script src="js/main.js"></script>
+    <script src="js/game.js"></script>
+    <script src="js/player.js"></script>
+    <script src="js/enemies.js"></script>
+    <script src="js/collision.js"></script>
+    <script src="js/controls.js"></script>
+    <script src="js/audio.js"></script>
 </body>
 </html>
         """.trimIndent())
 
-        File(projDir, "style.css").writeText("""
+        File(projDir, "css/style.css").writeText("""
 body {
-    font-family: system-ui, sans-serif;
+    margin: 0;
+    padding: 0;
     background-color: #121212;
-    color: #e0e0e0;
-    padding: 2rem;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    height: 100vh;
+    color: #fff;
+    font-family: sans-serif;
 }
-h1 {
-    color: #4caf50;
+#game-container {
+    box-shadow: 0 0 20px rgba(0,0,0,0.5);
+}
+canvas {
+    background-color: #000;
+    display: block;
 }
         """.trimIndent())
 
-        File(projDir, "script.js").writeText("""
-console.log("$projectName loaded!");
+        // Empty scaffolding JS files
+        listOf("main.js", "game.js", "player.js", "enemies.js", "collision.js", "controls.js", "audio.js").forEach { jsFile ->
+            File(projDir, "js/$jsFile").writeText("// $jsFile\n")
+        }
+        
+        // Add basic main logic
+        File(projDir, "js/main.js").writeText("""
+// main.js - Entry Point
+window.onload = () => {
+    console.log("$projectName initialized.");
+    // Game initialization logic here
+};
         """.trimIndent())
 
-        File(projDir, "README.md").writeText("# $projectName\n\nGenerated using Offline AI Coding Studio.")
+        File(projDir, "README.md").writeText("# $projectName\n\nGenerated using Offline Game Studio.")
+
+        // GameStudio internal memory files
+        File(gsDir, "game-spec.json").writeText("{}")
+        File(gsDir, "architecture.json").writeText("{}")
+        File(gsDir, "tasks.json").writeText("[]")
+        File(gsDir, "errors.json").writeText("[]")
+        File(gsDir, "history.json").writeText("[]")
 
         projDir
     }
@@ -123,5 +169,22 @@ console.log("$projectName loaded!");
         } else {
             target.delete()
         }
+    }
+
+    suspend fun exportProjectToZip(projectDir: File): File = withContext(Dispatchers.IO) {
+        val zipFile = File(downloadsDir, "${projectDir.name}.zip")
+        ZipOutputStream(FileOutputStream(zipFile)).use { zos ->
+            projectDir.walkTopDown().forEach { file ->
+                val zipFileName = file.absolutePath.removePrefix(projectDir.absolutePath).removePrefix("/")
+                if (zipFileName.isNotEmpty()) {
+                    val entry = ZipEntry(zipFileName + (if (file.isDirectory) "/" else ""))
+                    zos.putNextEntry(entry)
+                    if (file.isFile) {
+                        file.inputStream().use { it.copyTo(zos) }
+                    }
+                }
+            }
+        }
+        zipFile
     }
 }

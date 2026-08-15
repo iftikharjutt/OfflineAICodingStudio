@@ -14,7 +14,7 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "OfflineAICodingStudio"
+rootProject.name = "OfflineGameStudio"
 
 include(":app")
 

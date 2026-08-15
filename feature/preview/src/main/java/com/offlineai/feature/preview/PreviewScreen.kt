@@ -25,10 +25,13 @@ import androidx.compose.ui.viewinterop.AndroidView
 @Composable
 fun PreviewScreen(
     viewModel: PreviewViewModel,
+    isFullscreen: Boolean = false,
+    onToggleFullscreen: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val currentUrl by viewModel.currentUrl.collectAsState()
     val consoleLogs by viewModel.consoleLogs.collectAsState()
+    val serverStatus by viewModel.serverStatusText.collectAsState()
 
     var inputUrl by remember(currentUrl) {
         mutableStateOf(currentUrl.ifEmpty { "http://127.0.0.1:8080/index.html" })
@@ -39,34 +42,47 @@ fun PreviewScreen(
 
     Column(modifier = modifier.fillMaxSize()) {
         // Editable Address Bar & Server Controls
-        Surface(
-            color = MaterialTheme.colorScheme.surfaceVariant,
-            modifier = Modifier.fillMaxWidth()
-        ) {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(8.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
+        if (!isFullscreen) {
+            Surface(
+                color = MaterialTheme.colorScheme.surfaceVariant,
+                modifier = Modifier.fillMaxWidth()
             ) {
-                Icon(
-                    imageVector = Icons.Default.Language,
-                    contentDescription = null,
-                    tint = MaterialTheme.colorScheme.primary
-                )
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Language,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.primary
+                    )
 
-                OutlinedTextField(
-                    value = inputUrl,
-                    onValueChange = { inputUrl = it },
-                    readOnly = false,
-                    singleLine = true,
-                    label = { Text("Address Bar (URL)") },
-                    modifier = Modifier.weight(1f),
-                    textStyle = MaterialTheme.typography.bodyMedium,
-                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Go),
-                    keyboardActions = KeyboardActions(
-                        onGo = {
+                    OutlinedTextField(
+                        value = inputUrl,
+                        onValueChange = { inputUrl = it },
+                        readOnly = false,
+                        singleLine = true,
+                        label = { Text("Address Bar (URL)") },
+                        modifier = Modifier.weight(1f),
+                        textStyle = MaterialTheme.typography.bodyMedium,
+                        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Go),
+                        keyboardActions = KeyboardActions(
+                            onGo = {
+                                var target = inputUrl.trim()
+                                if (!target.startsWith("http://") && !target.startsWith("https://")) {
+                                    target = "http://$target"
+                                }
+                                viewModel.updateUrl(target)
+                                activeWebView?.loadUrl(target)
+                            }
+                        )
+                    )
+
+                    IconButton(
+                        onClick = {
                             var target = inputUrl.trim()
                             if (!target.startsWith("http://") && !target.startsWith("https://")) {
                                 target = "http://$target"
@@ -74,43 +90,44 @@ fun PreviewScreen(
                             viewModel.updateUrl(target)
                             activeWebView?.loadUrl(target)
                         }
-                    )
-                )
-
-                IconButton(
-                    onClick = {
-                        var target = inputUrl.trim()
-                        if (!target.startsWith("http://") && !target.startsWith("https://")) {
-                            target = "http://$target"
-                        }
-                        viewModel.updateUrl(target)
-                        activeWebView?.loadUrl(target)
-                    }
-                ) {
-                    Icon(Icons.Default.ArrowForward, contentDescription = "Go to URL", tint = MaterialTheme.colorScheme.primary)
-                }
-
-                IconButton(onClick = {
-                    activeWebView?.reload()
-                }) {
-                    Icon(Icons.Default.Refresh, contentDescription = "Reload")
-                }
-
-                IconButton(onClick = { showLogs = !showLogs }) {
-                    BadgedBox(
-                        badge = {
-                            if (consoleLogs.isNotEmpty()) {
-                                Badge { Text("${consoleLogs.size}") }
-                            }
-                        }
                     ) {
-                        Icon(Icons.Default.Terminal, contentDescription = "Console Logs")
+                        Icon(Icons.Default.ArrowForward, contentDescription = "Go to URL", tint = MaterialTheme.colorScheme.primary)
+                    }
+
+                    IconButton(onClick = {
+                        activeWebView?.reload()
+                    }) {
+                        Icon(Icons.Default.Refresh, contentDescription = "Reload")
+                    }
+
+                    IconButton(onClick = { showLogs = !showLogs }) {
+                        BadgedBox(
+                            badge = {
+                                if (consoleLogs.isNotEmpty()) {
+                                    Badge { Text("${consoleLogs.size}") }
+                                }
+                            }
+                        ) {
+                            Icon(Icons.Default.Terminal, contentDescription = "Console Logs")
+                        }
+                    }
+                    
+                    IconButton(onClick = onToggleFullscreen) {
+                        Icon(Icons.Default.Fullscreen, contentDescription = "Enter Fullscreen")
                     }
                 }
             }
+            HorizontalDivider()
+            Surface(color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f), modifier = Modifier.fillMaxWidth()) {
+                Text(
+                    text = serverStatus,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = if (serverStatus.contains("RUNNING")) Color(0xFF4CAF50) else Color.Red,
+                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp)
+                )
+            }
+            HorizontalDivider()
         }
-
-        HorizontalDivider()
 
         // WebView Container
         Box(
@@ -127,15 +144,54 @@ fun PreviewScreen(
                         settings.allowFileAccess = true
                         settings.allowContentAccess = true
                         settings.mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
+                        
+                        class ConsoleInterface {
+                            @android.webkit.JavascriptInterface
+                            fun postMessage(type: String, message: String) {
+                                viewModel.addConsoleLog("[$type] $message")
+                            }
+                        }
+                        addJavascriptInterface(ConsoleInterface(), "AndroidConsole")
+
+                        webChromeClient = object : android.webkit.WebChromeClient() {
+                            override fun onConsoleMessage(consoleMessage: android.webkit.ConsoleMessage?): Boolean {
+                                consoleMessage?.let {
+                                    val type = when(it.messageLevel()) {
+                                        android.webkit.ConsoleMessage.MessageLevel.ERROR -> "ERROR"
+                                        android.webkit.ConsoleMessage.MessageLevel.WARNING -> "WARN"
+                                        else -> "LOG"
+                                    }
+                                    viewModel.addConsoleLog("[$type] ${it.message()} -- ${it.sourceId()}:${it.lineNumber()}")
+                                }
+                                return super.onConsoleMessage(consoleMessage)
+                            }
+                        }
+
+                        val jsCode = """
+                            (function() {
+                                window.onerror = function(msg, url, line, col, error) {
+                                    AndroidConsole.postMessage("ERROR", msg + ' at ' + line + ':' + col);
+                                    return false;
+                                };
+                                window.addEventListener('unhandledrejection', function(event) {
+                                    AndroidConsole.postMessage("ERROR", 'Unhandled Promise Rejection: ' + event.reason);
+                                });
+                            })();
+                        """.trimIndent()
 
                         webViewClient = object : WebViewClient() {
+                            override fun onPageFinished(view: WebView?, url: String?) {
+                                super.onPageFinished(view, url)
+                                view?.evaluateJavascript(jsCode, null)
+                            }
+                            
                             override fun onReceivedError(
                                 view: WebView?,
                                 request: WebResourceRequest?,
                                 error: WebResourceError?
                             ) {
                                 super.onReceivedError(view, request, error)
-                                val log = "Error: ${error?.description} on ${request?.url}"
+                                val log = "[ERROR] Network: ${error?.description} on ${request?.url}"
                                 viewModel.addConsoleLog(log)
                             }
                         }
@@ -179,6 +235,18 @@ fun PreviewScreen(
                             }
                         }
                     }
+                }
+            }
+
+            if (isFullscreen) {
+                FloatingActionButton(
+                    onClick = onToggleFullscreen,
+                    modifier = Modifier
+                        .align(Alignment.TopEnd)
+                        .padding(16.dp),
+                    containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.8f)
+                ) {
+                    Icon(Icons.Default.FullscreenExit, contentDescription = "Exit Fullscreen")
                 }
             }
         }

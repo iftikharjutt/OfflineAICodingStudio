@@ -27,6 +27,7 @@ fun ProjectsScreen(
 
     var showCreateDialog by remember { mutableStateOf(false) }
     var showCreateFileDialog by remember { mutableStateOf(false) }
+    var showProjectDropdown by remember { mutableStateOf(false) }
 
     Column(modifier = modifier.fillMaxSize()) {
         // Projects Header Actions
@@ -48,12 +49,27 @@ fun ProjectsScreen(
                     Spacer(Modifier.width(4.dp))
                     Text("New Project")
                 }
+                OutlinedButton(onClick = { viewModel.createProjectFromTemplate("Snake") }) {
+                    Icon(Icons.Default.Games, contentDescription = "Template")
+                    Spacer(Modifier.width(4.dp))
+                    Text("Snake Template")
+                }
 
                 if (activeProject != null) {
                     OutlinedButton(onClick = { showCreateFileDialog = true }) {
                         Icon(Icons.Default.CreateNewFolder, contentDescription = "New File")
                         Spacer(Modifier.width(4.dp))
                         Text("New File")
+                    }
+                    
+                    OutlinedButton(onClick = { 
+                        viewModel.exportActiveProject { file -> 
+                            // Result is saved to Downloads directory
+                        }
+                    }) {
+                        Icon(Icons.Default.Download, contentDescription = "Export Zip")
+                        Spacer(Modifier.width(4.dp))
+                        Text("Export")
                     }
                 }
             }
@@ -73,11 +89,28 @@ fun ProjectsScreen(
                     text = "Active: ",
                     style = MaterialTheme.typography.labelLarge
                 )
-                AssistChip(
-                    onClick = { /* Dropdown to switch project */ },
-                    label = { Text(activeProject?.name ?: "Select Project") },
-                    leadingIcon = { Icon(Icons.Default.FolderSpecial, contentDescription = null) }
-                )
+                Box {
+                    AssistChip(
+                        onClick = { showProjectDropdown = true },
+                        label = { Text(activeProject?.name ?: "Select Project") },
+                        leadingIcon = { Icon(Icons.Default.FolderSpecial, contentDescription = null) },
+                        trailingIcon = { Icon(Icons.Default.ArrowDropDown, contentDescription = null) }
+                    )
+                    DropdownMenu(
+                        expanded = showProjectDropdown,
+                        onDismissRequest = { showProjectDropdown = false }
+                    ) {
+                        projects.forEach { project ->
+                            DropdownMenuItem(
+                                text = { Text(project.name) },
+                                onClick = {
+                                    viewModel.selectProject(project)
+                                    showProjectDropdown = false
+                                }
+                            )
+                        }
+                    }
+                }
             }
         } else {
             Card(
@@ -94,6 +127,10 @@ fun ProjectsScreen(
                     Spacer(Modifier.height(8.dp))
                     Button(onClick = { showCreateDialog = true }) {
                         Text("Create Your First Project")
+                    }
+                    Spacer(Modifier.height(8.dp))
+                    OutlinedButton(onClick = { viewModel.createProjectFromTemplate("Snake") }) {
+                        Text("Or start from a Snake Template")
                     }
                 }
             }

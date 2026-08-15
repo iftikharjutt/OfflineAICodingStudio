@@ -10,6 +10,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -19,7 +20,8 @@ fun ModelsScreen(
     modifier: Modifier = Modifier
 ) {
     val availableModels by viewModel.availableModels.collectAsState()
-    val selectedModel by viewModel.selectedModel.collectAsState()
+    val selectedModelA by viewModel.selectedModelA.collectAsState()
+    val selectedModelB by viewModel.selectedModelB.collectAsState()
     val scanMessage by viewModel.scanMessage.collectAsState()
 
     Column(modifier = modifier.fillMaxSize()) {
@@ -98,43 +100,56 @@ fun ModelsScreen(
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
                 items(availableModels) { model ->
-                    Card(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clickable { viewModel.selectModel(model) },
-                        colors = CardDefaults.cardColors(
-                            containerColor = if (model.isSelected) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant
-                        )
-                    ) {
-                        Row(
+                        Card(
                             modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(16.dp),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
+                                .fillMaxWidth(),
+                            colors = CardDefaults.cardColors(
+                                containerColor = if (model.isSelectedA || model.isSelectedB) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant
+                            )
                         ) {
-                            Column(modifier = Modifier.weight(1f)) {
-                                Text(model.name, style = MaterialTheme.typography.titleMedium)
-                                Spacer(Modifier.height(4.dp))
-                                Text(
-                                    "Size: ${model.sizeBytes / (1024 * 1024)} MB",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.primary
-                                )
-                                Text(
-                                    "Path: ${model.path}",
-                                    style = MaterialTheme.typography.labelSmall
-                                )
-                            }
-                            if (model.isSelected) {
-                                Icon(
-                                    Icons.Default.CheckCircle,
-                                    contentDescription = "Active Model",
-                                    tint = MaterialTheme.colorScheme.primary
-                                )
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(16.dp),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(model.name, style = MaterialTheme.typography.titleMedium)
+                                    Spacer(Modifier.height(4.dp))
+                                    Text(
+                                        "Size: ${model.sizeBytes / (1024 * 1024)} MB",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.primary
+                                    )
+                                    Text(
+                                        "Path: ${model.path}",
+                                        style = MaterialTheme.typography.labelSmall
+                                    )
+                                }
+                                Column(horizontalAlignment = Alignment.End) {
+                                    Row {
+                                        Button(
+                                            onClick = { viewModel.selectModelA(model) },
+                                            colors = ButtonDefaults.buttonColors(
+                                                containerColor = if (model.isSelectedA) MaterialTheme.colorScheme.primary else Color.Gray
+                                            ),
+                                            modifier = Modifier.padding(end = 4.dp)
+                                        ) {
+                                            Text("Set A")
+                                        }
+                                        Button(
+                                            onClick = { viewModel.selectModelB(model) },
+                                            colors = ButtonDefaults.buttonColors(
+                                                containerColor = if (model.isSelectedB) MaterialTheme.colorScheme.secondary else Color.Gray
+                                            )
+                                        ) {
+                                            Text("Set B")
+                                        }
+                                    }
+                                }
                             }
                         }
-                    }
                 }
             }
         }

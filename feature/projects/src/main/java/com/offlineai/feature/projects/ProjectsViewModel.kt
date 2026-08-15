@@ -74,6 +74,28 @@ class ProjectsViewModel(
         }
     }
 
+    fun createProjectFromTemplate(templateName: String) {
+        viewModelScope.launch {
+            val projectName = templateName + "_" + System.currentTimeMillis()
+            val projDir = workspaceManager.createProjectDirectory(projectName)
+            
+            if (templateName == "Snake") {
+                workspaceManager.writeFileText(projDir, "index.html", com.offlineai.core.filesystem.GameTemplates.SNAKE_HTML)
+                workspaceManager.writeFileText(projDir, "js/game.js", com.offlineai.core.filesystem.GameTemplates.SNAKE_JS)
+            }
+            
+            val newProj = ProjectModel(
+                id = projDir.name,
+                name = projDir.name,
+                path = projDir.absolutePath,
+                createdAt = projDir.lastModified(),
+                updatedAt = projDir.lastModified()
+            )
+            loadProjectsFromWorkspace()
+            selectProject(newProj)
+        }
+    }
+
     fun selectProject(project: ProjectModel) {
         _activeProject.value = project
         refreshFileTree()
@@ -124,6 +146,22 @@ class ProjectsViewModel(
                 _activeFileContent.value = null
             }
             refreshFileTree()
+        }
+    }
+
+    fun exportActiveProject(onComplete: (File?) -> Unit) {
+        val proj = _activeProject.value
+        if (proj == null) {
+            onComplete(null)
+            return
+        }
+        viewModelScope.launch {
+            try {
+                val zip = workspaceManager.exportProjectToZip(File(proj.path))
+                onComplete(zip)
+            } catch (e: Exception) {
+                onComplete(null)
+            }
         }
     }
 }

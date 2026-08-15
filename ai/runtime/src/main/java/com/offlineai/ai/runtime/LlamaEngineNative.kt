@@ -31,8 +31,9 @@ class LlamaEngineNative : LlamaInferenceEngine {
     private external fun nativeLoadModel(modelPath: String, contextSize: Int, threads: Int): String
     private external fun nativeUnloadModel(sessionId: String): Boolean
     private external fun nativeGenerateToken(sessionId: String, prompt: String, isFirstToken: Boolean): String
+    external fun nativeGetAvailableRAM(): Long
 
-    private var activeSession: ModelSession? = null
+    private val activeSessions = java.util.concurrent.ConcurrentHashMap<String, ModelSession>()
 
     override suspend fun loadModel(request: ModelLoadRequest): Result<ModelSession> {
         if (!nativeAvailable) {
@@ -66,7 +67,7 @@ class LlamaEngineNative : LlamaInferenceEngine {
                 contextSize = request.contextSize,
                 loadedAt = System.currentTimeMillis()
             )
-            activeSession = session
+            activeSessions[sessionId] = session
             Log.i(TAG, "Model loaded successfully: sessionID=$sessionId, loadTime=${loadDuration}ms")
             Result.success(session)
         } catch (e: Exception) {
@@ -84,15 +85,13 @@ class LlamaEngineNative : LlamaInferenceEngine {
                 Log.e(TAG, "Failed to unload model session $sessionId:${e.message}", e)
             }
         }
-        if (activeSession?.sessionId == sessionId) {
-            activeSession = null
-        }
+        activeSessions.remove(sessionId)
     }
 
     override fun streamCompletion(request: CompletionRequest): Flow<TokenEvent> = flow {
-        val session = activeSession
+        val session = activeSessions[request.sessionId] ?: activeSessions.values.firstOrNull()
         if (session == null) {
-            val err = ModelNotLoadedException("No GGUF model loaded. Please select and load a model first.")
+            val err = ModelNotLoadedException("Session ${request.sessionId} not found or no GGUF model loaded.")
             Log.e(TAG, "streamCompletion failed: ${err.message}")
             emit(TokenEvent.Error(err))
             return@flow

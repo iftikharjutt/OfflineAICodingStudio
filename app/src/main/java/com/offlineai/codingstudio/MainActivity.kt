@@ -21,6 +21,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
+import com.offlineai.ai.runtime.DualModelManager
 import com.offlineai.ai.runtime.LlamaEngineNative
 import com.offlineai.ai.runtime.LlamaInferenceEngine
 import com.offlineai.ai.runtime.ModelLoadRequest
@@ -80,10 +81,11 @@ class MainActivity : ComponentActivity() {
 
         val workspaceManager = WorkspaceManager(applicationContext.filesDir)
         val inferenceEngine = LlamaEngineNative()
+        val dualModelManager = DualModelManager(applicationContext, inferenceEngine)
         val projectsViewModel = ProjectsViewModel(workspaceManager)
-        val editorViewModel = EditorViewModel(workspaceManager)
-        val previewViewModel = PreviewViewModel(workspaceManager)
-        val chatViewModel = ChatViewModel(workspaceManager, inferenceEngine)
+        val editorViewModel = EditorViewModel(workspaceManager, inferenceEngine)
+        val previewViewModel = PreviewViewModel(workspaceManager, dualModelManager)
+        val chatViewModel = ChatViewModel(workspaceManager, dualModelManager)
         val terminalViewModel = TerminalViewModel()
         val modelsViewModel = ModelsViewModel(workspaceManager)
         val settingsViewModel = SettingsViewModel(applicationContext.settingsDataStore)
@@ -98,7 +100,8 @@ class MainActivity : ComponentActivity() {
                     terminalViewModel = terminalViewModel,
                     modelsViewModel = modelsViewModel,
                     settingsViewModel = settingsViewModel,
-                    inferenceEngine = inferenceEngine
+                    inferenceEngine = inferenceEngine,
+                    dualModelManager = dualModelManager
                 )
             }
         }
@@ -115,23 +118,33 @@ fun AppShell(
     terminalViewModel: TerminalViewModel,
     modelsViewModel: ModelsViewModel,
     settingsViewModel: SettingsViewModel,
-    inferenceEngine: LlamaInferenceEngine
+    inferenceEngine: LlamaInferenceEngine,
+    dualModelManager: DualModelManager
 ) {
     var selectedDestination by remember { mutableStateOf<NavigationDestination>(NavigationDestination.Chat) }
+    var isPreviewFullscreen by remember { mutableStateOf(false) }
     val activeProject by projectsViewModel.activeProject.collectAsState()
     val activeFilePath by projectsViewModel.activeFilePath.collectAsState()
 
-    // Load the selected GGUF model into the inference engine
-    val selectedModel by modelsViewModel.selectedModel.collectAsState()
+    // Load the selected GGUF models into the dual inference engine
+    val selectedModelA by modelsViewModel.selectedModelA.collectAsState()
+    val selectedModelB by modelsViewModel.selectedModelB.collectAsState()
     val currentSettings by settingsViewModel.settings.collectAsState()
-    LaunchedEffect(selectedModel, currentSettings) {
-        selectedModel?.let { model ->
-            inferenceEngine.loadModel(
-                ModelLoadRequest(
-                    modelPath = model.path,
-                    contextSize = currentSettings.contextSize,
-                    threadCount = currentSettings.threadCount
-                )
+    
+    LaunchedEffect(selectedModelA, currentSettings) {
+        selectedModelA?.let { model ->
+            dualModelManager.loadModelA(
+                modelPath = model.path,
+                contextSize = currentSettings.contextSize
+            )
+        }
+    }
+
+    LaunchedEffect(selectedModelB, currentSettings) {
+        selectedModelB?.let { model ->
+            dualModelManager.loadModelB(
+                modelPath = model.path,
+                contextSize = currentSettings.contextSize
             )
         }
     }
@@ -165,23 +178,27 @@ fun AppShell(
 
     Scaffold(
         topBar = {
-            TopAppBar(
-                title = { Text(selectedDestination.title) },
-                colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = MaterialTheme.colorScheme.primaryContainer,
-                    titleContentColor = MaterialTheme.colorScheme.onPrimaryContainer,
+            if (!isPreviewFullscreen) {
+                TopAppBar(
+                    title = { Text(selectedDestination.title) },
+                    colors = TopAppBarDefaults.topAppBarColors(
+                        containerColor = MaterialTheme.colorScheme.primaryContainer,
+                        titleContentColor = MaterialTheme.colorScheme.onPrimaryContainer,
+                    )
                 )
-            )
+            }
         },
         bottomBar = {
-            NavigationBar {
-                destinations.forEach { (destination, icon) ->
-                    NavigationBarItem(
-                        icon = { Icon(icon, contentDescription = destination.title) },
-                        label = { Text(destination.title) },
-                        selected = selectedDestination == destination,
-                        onClick = { selectedDestination = destination }
-                    )
+            if (!isPreviewFullscreen) {
+                NavigationBar {
+                    destinations.forEach { (destination, icon) ->
+                        NavigationBarItem(
+                            icon = { Icon(icon, contentDescription = destination.title) },
+                            label = { Text(destination.title) },
+                            selected = selectedDestination == destination,
+                            onClick = { selectedDestination = destination }
+                        )
+                    }
                 }
             }
         }
@@ -190,17 +207,26 @@ fun AppShell(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(paddingValues)
-                .padding(16.dp)
+                .padding(if (isPreviewFullscreen) 0.dp else 16.dp)
         ) {
             when (selectedDestination) {
                 NavigationDestination.Chat -> ChatScreen(
                     viewModel = chatViewModel,
                     activeProjectDir = activeProject?.let { File(it.path) },
-                    selectedModelPath = selectedModel?.path
+                    selectedModelPath = selectedModelA?.path, // Fallback for single mode compat
+                    systemPrompt = currentSettings.systemPrompt,
+                    onProjectCreated = { projectsViewModel.loadProjectsFromWorkspace() }
                 )
                 NavigationDestination.Projects -> ProjectsScreen(viewModel = projectsViewModel)
-                NavigationDestination.Editor -> EditorScreen(viewModel = editorViewModel)
-                NavigationDestination.Preview -> PreviewScreen(viewModel = previewViewModel)
+                NavigationDestination.Editor -> EditorScreen(
+                    viewModel = editorViewModel,
+                    selectedModelPath = selectedModelA?.path
+                )
+                NavigationDestination.Preview -> PreviewScreen(
+                    viewModel = previewViewModel,
+                    isFullscreen = isPreviewFullscreen,
+                    onToggleFullscreen = { isPreviewFullscreen = !isPreviewFullscreen }
+                )
                 NavigationDestination.Terminal -> TerminalScreen(
                     viewModel = terminalViewModel,
                     workingDir = activeProject?.let { File(it.path) }

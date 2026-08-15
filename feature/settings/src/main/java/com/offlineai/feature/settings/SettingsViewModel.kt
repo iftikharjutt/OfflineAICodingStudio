@@ -17,7 +17,9 @@ data class AppSettings(
     val threadCount: Int = 4,
     val isDarkMode: Boolean = true,
     val fontSize: Int = 14,
-    val autoSaveOnPreview: Boolean = true
+    val autoSaveOnPreview: Boolean = true,
+    val systemPrompt: String = "You are a helpful expert AI coding assistant.",
+    val useModelBForReviewAndDebug: Boolean = false
 )
 
 class SettingsViewModel(
@@ -32,6 +34,8 @@ class SettingsViewModel(
         val THREAD_COUNT = intPreferencesKey("thread_count")
         val DARK_MODE = booleanPreferencesKey("dark_mode")
         val AUTO_SAVE = booleanPreferencesKey("auto_save")
+        val SYSTEM_PROMPT = androidx.datastore.preferences.core.stringPreferencesKey("system_prompt")
+        val USE_MODEL_B = booleanPreferencesKey("use_model_b")
     }
 
     init {
@@ -42,7 +46,9 @@ class SettingsViewModel(
                         contextSize = prefs[Keys.CONTEXT_SIZE] ?: 8192,
                         threadCount = prefs[Keys.THREAD_COUNT] ?: 4,
                         isDarkMode = prefs[Keys.DARK_MODE] ?: true,
-                        autoSaveOnPreview = prefs[Keys.AUTO_SAVE] ?: true
+                        autoSaveOnPreview = prefs[Keys.AUTO_SAVE] ?: true,
+                        systemPrompt = prefs[Keys.SYSTEM_PROMPT] ?: "You are a helpful expert AI coding assistant.",
+                        useModelBForReviewAndDebug = prefs[Keys.USE_MODEL_B] ?: false
                     )
                 }
             }
@@ -56,6 +62,8 @@ class SettingsViewModel(
                 prefs[Keys.THREAD_COUNT] = settings.threadCount
                 prefs[Keys.DARK_MODE] = settings.isDarkMode
                 prefs[Keys.AUTO_SAVE] = settings.autoSaveOnPreview
+                prefs[Keys.SYSTEM_PROMPT] = settings.systemPrompt
+                prefs[Keys.USE_MODEL_B] = settings.useModelBForReviewAndDebug
             }
         }
     }
@@ -77,6 +85,16 @@ class SettingsViewModel(
 
     fun toggleAutoSave(enabled: Boolean) {
         _settings.value = _settings.value.copy(autoSaveOnPreview = enabled)
+        persist(_settings.value)
+    }
+
+    fun updateSystemPrompt(prompt: String) {
+        _settings.value = _settings.value.copy(systemPrompt = prompt)
+        persist(_settings.value)
+    }
+
+    fun toggleUseModelB(enabled: Boolean) {
+        _settings.value = _settings.value.copy(useModelBForReviewAndDebug = enabled)
         persist(_settings.value)
     }
 }
