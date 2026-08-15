@@ -16,18 +16,26 @@ import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.withStyle
+import androidx.compose.ui.text.input.VisualTransformation
+import androidx.compose.ui.text.input.OffsetMapping
+import androidx.compose.ui.text.input.TransformedText
 import androidx.compose.ui.unit.sp
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun EditorScreen(
     viewModel: EditorViewModel,
+    selectedModelPath: String? = null,
     modifier: Modifier = Modifier
 ) {
     val text by viewModel.text.collectAsState()
     val isDirty by viewModel.isDirty.collectAsState()
     val activeFileName by viewModel.activeFileName.collectAsState()
     val activeFilePath by viewModel.activeFilePath.collectAsState()
+    val isGenerating by viewModel.isGenerating.collectAsState()
 
     val lines = remember(text) { text.split("\n") }
     val lineCount = lines.size
@@ -72,10 +80,47 @@ fun EditorScreen(
                         onClick = { viewModel.saveFile() },
                         enabled = isDirty
                     ) {
-                        Icon(Icons.Default.Save, contentDescription = "Save")
+                        Icon(Icons.Default.Save, contentDescription = "Save", modifier = Modifier.size(16.dp))
                         Spacer(Modifier.width(4.dp))
                         Text("Save")
                     }
+                    
+                    OutlinedButton(
+                        onClick = { viewModel.autoComplete(selectedModelPath) },
+                        enabled = !isGenerating && selectedModelPath != null
+                    ) {
+                        Icon(Icons.Default.AutoAwesome, contentDescription = "AI Auto-Complete", modifier = Modifier.size(16.dp))
+                        if (isGenerating) {
+                            Spacer(Modifier.width(4.dp))
+                            CircularProgressIndicator(modifier = Modifier.size(12.dp), strokeWidth = 2.dp)
+                        }
+                    }
+                }
+            }
+        }
+
+        // Warning Banner if No Model File Selected
+        if (selectedModelPath == null) {
+            Surface(
+                color = Color(0xFFFFF3CD),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Row(
+                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(
+                        Icons.Default.Warning,
+                        contentDescription = null,
+                        tint = Color(0xFF856404),
+                        modifier = Modifier.size(20.dp)
+                    )
+                    Spacer(Modifier.width(8.dp))
+                    Text(
+                        text = "No GGUF Model loaded. Open 'Models' tab to select/load a model.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = Color(0xFF856404)
+                    )
                 }
             }
         }
@@ -141,6 +186,7 @@ fun EditorScreen(
                         color = Color(0xFFD4D4D4),
                         lineHeight = 20.sp
                     ),
+                    visualTransformation = CodeSyntaxTransformation(),
                     modifier = Modifier.fillMaxSize()
                 )
             }
@@ -171,5 +217,53 @@ fun EditorScreen(
                 )
             }
         }
+    }
+}
+
+class CodeSyntaxTransformation : VisualTransformation {
+    override fun filter(text: androidx.compose.ui.text.AnnotatedString): TransformedText {
+        val original = text.text
+        val annotated = buildAnnotatedString {
+            // Very simple Regex-based highlighting
+            // Matches strings "..." or '...'
+            val stringRegex = Regex("(\"[^\"]*\")|('[^']*')")
+            // Matches standard keywords
+            val keywordRegex = Regex("\\b(function|var|let|const|class|return|if|else|import|export|from|val|fun|class|<!DOCTYPE html>|<html>|<body>|<head>|<title>|<script>|<style>|</div>|<div>|<span>|</span>|</a>|<a>)\\b")
+            // Matches comments // or /* ... */
+            val commentRegex = Regex("(//.*)|(/\\*[\\s\\S]*?\\*/)")
+            
+            var lastIndex = 0
+            
+            // We apply spans greedily. A robust parser would be better, but this works for simple syntax
+            val allMatches = (stringRegex.findAll(original) + keywordRegex.findAll(original) + commentRegex.findAll(original))
+                .sortedBy { it.range.first }
+                .toList()
+                
+            var currentIndex = 0
+            while (currentIndex < original.length) {
+                val match = allMatches.firstOrNull { it.range.first >= currentIndex }
+                if (match == null) {
+                    append(original.substring(currentIndex))
+                    break
+                }
+                
+                if (match.range.first > currentIndex) {
+                    append(original.substring(currentIndex, match.range.first))
+                }
+                
+                val matchText = match.value
+                val color = when {
+                    matchText.startsWith("//") || matchText.startsWith("/*") -> Color(0xFF6A9955) // Comments (Green)
+                    matchText.startsWith("\"") || matchText.startsWith("'") -> Color(0xFFCE9178) // Strings (Orange)
+                    else -> Color(0xFF569CD6) // Keywords (Blue)
+                }
+                
+                withStyle(SpanStyle(color = color)) {
+                    append(matchText)
+                }
+                currentIndex = match.range.last + 1
+            }
+        }
+        return TransformedText(annotated, OffsetMapping.Identity)
     }
 }
