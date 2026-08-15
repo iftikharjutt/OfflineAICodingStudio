@@ -14,6 +14,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.text.AnnotatedString
@@ -33,11 +34,15 @@ fun ChatScreen(
     viewModel: ChatViewModel,
     activeProjectDir: File?,
     selectedModelPath: String? = null,
+    systemPrompt: String? = null,
+    onProjectCreated: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val messages by viewModel.messages.collectAsState()
     val isGenerating by viewModel.isGenerating.collectAsState()
     val activeMode by viewModel.activeMode.collectAsState()
+    val isMemoryEnabled by viewModel.isMemoryEnabled.collectAsState()
+    val isDualModeEnabled by viewModel.isDualModeEnabled.collectAsState()
 
     var inputText by remember { mutableStateOf("") }
     var showDiagnosticsDialog by remember { mutableStateOf(false) }
@@ -98,9 +103,48 @@ fun ChatScreen(
                             selectedLabelColor = Color(0xFFFF9800)
                         )
                     )
+                    Spacer(Modifier.width(6.dp))
+                    FilterChip(
+                        selected = activeMode == AssistantMode.GAME_STUDIO,
+                        onClick = { viewModel.setMode(AssistantMode.GAME_STUDIO) },
+                        label = { Text("Game Studio") },
+                        leadingIcon = {
+                            Icon(
+                                Icons.Default.VideogameAsset,
+                                contentDescription = null,
+                                tint = Color(0xFF9C27B0)
+                            )
+                        },
+                        colors = FilterChipDefaults.filterChipColors(
+                            selectedContainerColor = Color(0xFF9C27B0).copy(alpha = 0.2f),
+                            selectedLabelColor = Color(0xFF9C27B0)
+                        )
+                    )
                 }
 
                 Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        text = "Dual Mode",
+                        style = MaterialTheme.typography.labelMedium,
+                        modifier = Modifier.padding(end = 4.dp)
+                    )
+                    Switch(
+                        checked = isDualModeEnabled,
+                        onCheckedChange = { viewModel.toggleDualMode(it) },
+                        modifier = Modifier.scale(0.8f)
+                    )
+                    Spacer(Modifier.width(8.dp))
+                    Text(
+                        text = "Memory",
+                        style = MaterialTheme.typography.labelMedium,
+                        modifier = Modifier.padding(end = 4.dp)
+                    )
+                    Switch(
+                        checked = isMemoryEnabled,
+                        onCheckedChange = { viewModel.toggleMemory(it) },
+                        modifier = Modifier.scale(0.8f)
+                    )
+                    Spacer(Modifier.width(8.dp))
                     IconButton(onClick = { showDiagnosticsDialog = true }) {
                         Icon(
                             imageVector = if (diagnosticReport.lastErrorMessage != null) Icons.Default.Warning else Icons.Default.Info,
@@ -162,6 +206,11 @@ fun ChatScreen(
                         if (activeProjectDir != null) {
                             viewModel.applyPatchToProject(msg.id, activeProjectDir)
                         }
+                    },
+                    onCreateProject = {
+                        viewModel.createProjectFromChatCode(msg.id) {
+                            onProjectCreated()
+                        }
                     }
                 )
             }
@@ -191,6 +240,8 @@ fun ChatScreen(
                         Text(
                             if (activeMode == AssistantMode.CHAT)
                                 "Ask AI a question or request guidance..."
+                            else if (activeMode == AssistantMode.GAME_STUDIO)
+                                "Create a game (e.g., 'Create a retro snake game')..."
                             else
                                 "Ask Agent to build, edit, or refactor code..."
                         )
@@ -203,7 +254,7 @@ fun ChatScreen(
                 IconButton(
                     onClick = {
                         if (inputText.isNotBlank()) {
-                            viewModel.sendMessage(inputText, activeProjectDir, selectedModelPath)
+                            viewModel.sendMessage(inputText, activeProjectDir, selectedModelPath, systemPrompt)
                             inputText = ""
                         }
                     },
@@ -272,7 +323,8 @@ fun ChatScreen(
 @Composable
 fun ChatMessageBubble(
     message: ChatMessage,
-    onApplyPatch: () -> Unit
+    onApplyPatch: () -> Unit,
+    onCreateProject: () -> Unit
 ) {
     val isUser = message.sender == "user"
 
@@ -305,11 +357,15 @@ fun ChatMessageBubble(
                     if (!isUser) {
                         Surface(
                             shape = RoundedCornerShape(4.dp),
-                            color = if (message.mode == AssistantMode.CHAT) Color(0xFF2196F3) else Color(0xFFFF9800),
+                            color = when (message.mode) {
+                                AssistantMode.CHAT -> Color(0xFF2196F3)
+                                AssistantMode.AGENT -> Color(0xFFFF9800)
+                                AssistantMode.GAME_STUDIO -> Color(0xFF9C27B0)
+                            },
                             modifier = Modifier.padding(start = 4.dp)
                         ) {
                             Text(
-                                text = if (message.mode == AssistantMode.CHAT) "CHAT" else "AGENT",
+                                text = message.mode.name,
                                 style = MaterialTheme.typography.labelSmall,
                                 color = Color.White,
                                 modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp)
@@ -318,11 +374,47 @@ fun ChatMessageBubble(
                     }
                 }
 
-                Spacer(Modifier.height(4.dp))
-                Text(
-                    text = message.text.ifBlank { "..." },
-                    style = MaterialTheme.typography.bodyMedium
-                )
+                Spacer(Modifier.height(8.dp))
+                if (message.textB != null) {
+                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text("Model A", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
+                            Text(
+                                text = message.text.ifBlank { "..." },
+                                style = MaterialTheme.typography.bodyMedium.copy(lineHeight = 22.sp, letterSpacing = 0.25.sp)
+                            )
+                        }
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text("Model B", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.secondary)
+                            Text(
+                                text = message.textB.ifBlank { "..." },
+                                style = MaterialTheme.typography.bodyMedium.copy(lineHeight = 22.sp, letterSpacing = 0.25.sp)
+                            )
+                        }
+                    }
+                } else {
+                    Text(
+                        text = message.text.ifBlank { "..." },
+                        style = MaterialTheme.typography.bodyMedium.copy(
+                            lineHeight = 22.sp,
+                            letterSpacing = 0.25.sp
+                        ),
+                        modifier = Modifier.padding(bottom = 4.dp)
+                    )
+                }
+
+                if (!isUser && message.text.contains("```") && !message.text.contains("✅ Transferred")) {
+                    Spacer(Modifier.height(8.dp))
+                    Button(
+                        onClick = onCreateProject,
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF10B981))
+                    ) {
+                        Icon(Icons.Default.Build, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Spacer(Modifier.width(8.dp))
+                        Text("Create Project from Code")
+                    }
+                }
 
                 val patch: ParsedAiResponse? = message.parsedPatch
                 if (patch != null && message.mode == AssistantMode.AGENT) {
