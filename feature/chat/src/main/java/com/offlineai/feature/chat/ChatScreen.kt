@@ -36,10 +36,13 @@ fun ChatScreen(
     val messages by viewModel.messages.collectAsState()
     val isGenerating by viewModel.isGenerating.collectAsState()
     val activeMode by viewModel.activeMode.collectAsState()
+    val modelLoadState by viewModel.modelLoadState.collectAsState()
+    val modelLoadError by viewModel.modelLoadError.collectAsState()
     var inputText by remember { mutableStateOf("") }
     var showDiagnosticsDialog by remember { mutableStateOf(false) }
     val clipboardManager = LocalClipboardManager.current
     val diagnosticReport by DiagnosticsManager.currentReport.collectAsState()
+    val modelReady = modelLoadState == ChatViewModel.ModelLoadState.Loaded
 
     Column(modifier = modifier.fillMaxSize()) {
         Surface(color = MaterialTheme.colorScheme.surface, tonalElevation = 2.dp) {
@@ -80,20 +83,47 @@ fun ChatScreen(
             }
         }
 
-        if (selectedModelPath == null) {
-            Surface(
-                color = MaterialTheme.colorScheme.tertiaryContainer,
-                tonalElevation = 1.dp,
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Row(Modifier.padding(horizontal = 16.dp, vertical = 9.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Icon(Icons.Default.WarningAmber, null, Modifier.size(19.dp), tint = MaterialTheme.colorScheme.onTertiaryContainer)
-                    Spacer(Modifier.width(9.dp))
-                    Text(
-                        "No GGUF model loaded. Open Models to select one.",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onTertiaryContainer
-                    )
+        val bannerText = when (modelLoadState) {
+            ChatViewModel.ModelLoadState.Idle -> "No GGUF model loaded. Open Models to select one."
+            ChatViewModel.ModelLoadState.Loading -> "Loading GGUF model… Chat will be ready when loading finishes."
+            ChatViewModel.ModelLoadState.Loaded -> "GGUF model ready • Offline inference enabled"
+        }
+        val bannerColor = when (modelLoadState) {
+            ChatViewModel.ModelLoadState.Idle -> MaterialTheme.colorScheme.tertiaryContainer
+            ChatViewModel.ModelLoadState.Loading -> MaterialTheme.colorScheme.secondaryContainer
+            ChatViewModel.ModelLoadState.Loaded -> MaterialTheme.colorScheme.primaryContainer
+        }
+        val bannerContentColor = when (modelLoadState) {
+            ChatViewModel.ModelLoadState.Idle -> MaterialTheme.colorScheme.onTertiaryContainer
+            ChatViewModel.ModelLoadState.Loading -> MaterialTheme.colorScheme.onSecondaryContainer
+            ChatViewModel.ModelLoadState.Loaded -> MaterialTheme.colorScheme.onPrimaryContainer
+        }
+
+        Surface(
+            color = bannerColor,
+            tonalElevation = 1.dp,
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Row(Modifier.padding(horizontal = 16.dp, vertical = 9.dp), verticalAlignment = Alignment.CenterVertically) {
+                Icon(
+                    when (modelLoadState) {
+                        ChatViewModel.ModelLoadState.Loaded -> Icons.Default.CheckCircle
+                        ChatViewModel.ModelLoadState.Loading -> Icons.Default.Sync
+                        ChatViewModel.ModelLoadState.Idle -> Icons.Default.WarningAmber
+                    },
+                    null,
+                    Modifier.size(19.dp),
+                    tint = bannerContentColor
+                )
+                Spacer(Modifier.width(9.dp))
+                Column(Modifier.weight(1f)) {
+                    Text(bannerText, style = MaterialTheme.typography.bodySmall, color = bannerContentColor)
+                    if (modelLoadState == ChatViewModel.ModelLoadState.Loading) {
+                        LinearProgressIndicator(Modifier.fillMaxWidth().padding(top = 5.dp))
+                    }
+                    if (modelLoadState == ChatViewModel.ModelLoadState.Idle && modelLoadError != null) {
+                        Text(modelLoadError ?: "", style = MaterialTheme.typography.bodySmall, color = bannerContentColor)
+                    }
                 }
             }
         }
@@ -120,21 +150,30 @@ fun ChatScreen(
                 OutlinedTextField(
                     value = inputText,
                     onValueChange = { inputText = it },
-                    placeholder = { Text(if (activeMode == AssistantMode.CHAT) "Ask the offline AI…" else "Ask Agent to build or refactor…") },
+                    placeholder = {
+                        Text(
+                            when {
+                                !modelReady -> "Load a GGUF model to start chatting…"
+                                activeMode == AssistantMode.CHAT -> "Ask the offline AI…"
+                                else -> "Ask Agent to build or refactor…"
+                            }
+                        )
+                    },
                     modifier = Modifier.weight(1f),
                     minLines = 1,
                     maxLines = 4,
-                    shape = RoundedCornerShape(16.dp)
+                    shape = RoundedCornerShape(16.dp),
+                    enabled = modelReady && !isGenerating
                 )
                 Spacer(Modifier.width(8.dp))
                 FilledIconButton(
                     onClick = {
-                        if (inputText.isNotBlank()) {
+                        if (modelReady && inputText.isNotBlank()) {
                             viewModel.sendMessage(inputText, activeProjectDir, selectedModelPath)
                             inputText = ""
                         }
                     },
-                    enabled = !isGenerating && inputText.isNotBlank(),
+                    enabled = modelReady && !isGenerating && inputText.isNotBlank(),
                     modifier = Modifier.size(50.dp)
                 ) {
                     Icon(Icons.AutoMirrored.Filled.Send, "Send prompt")
