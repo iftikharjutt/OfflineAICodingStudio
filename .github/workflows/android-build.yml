@@ -27,8 +27,13 @@ jobs:
     - name: Grant execute permission for gradlew
       run: chmod +x gradlew
 
+    - name: Verify Git Commit
+      run: |
+        git remote -v
+        git rev-parse HEAD
+
     - name: Build with Gradle
-      run: ./gradlew assembleDebug --stacktrace
+      run: ./gradlew :app:assembleDebug --no-daemon --stacktrace
 
     - name: Upload APK
       uses: actions/upload-artifact@v4
