@@ -10,25 +10,34 @@ import android.provider.Settings
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Build
+import androidx.compose.material.icons.filled.Chat
 import androidx.compose.material.icons.filled.Code
 import androidx.compose.material.icons.filled.Folder
+import androidx.compose.material.icons.filled.Memory
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Settings as SettingsIcon
+import androidx.compose.material.icons.filled.Terminal
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import com.offlineai.ai.runtime.DualModelManager
 import com.offlineai.ai.runtime.LlamaEngineNative
 import com.offlineai.ai.runtime.LlamaInferenceEngine
-import com.offlineai.ai.runtime.ModelLoadRequest
 import com.offlineai.core.datastore.settingsDataStore
 import com.offlineai.core.filesystem.WorkspaceManager
 import com.offlineai.core.navigation.NavigationDestination
 import com.offlineai.core.ui.OfflineAITheme
+import com.offlineai.core.ui.PrimaryCyan
 import com.offlineai.feature.chat.ChatScreen
 import com.offlineai.feature.chat.ChatViewModel
 import com.offlineai.feature.editor.EditorScreen
@@ -54,7 +63,6 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        // Request storage permissions for Android 10 and below
         if (Build.VERSION.SDK_INT <= Build.VERSION_CODES.Q) {
             requestPermissionLauncher.launch(
                 arrayOf(
@@ -64,7 +72,6 @@ class MainActivity : ComponentActivity() {
             )
         }
 
-        // Request All Files Access for Android 11+
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
             if (!Environment.isExternalStorageManager()) {
                 try {
@@ -108,6 +115,12 @@ class MainActivity : ComponentActivity() {
     }
 }
 
+private data class NavItem(
+    val destination: NavigationDestination,
+    val icon: ImageVector,
+    val shortLabel: String,
+)
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun AppShell(
@@ -126,11 +139,10 @@ fun AppShell(
     val activeProject by projectsViewModel.activeProject.collectAsState()
     val activeFilePath by projectsViewModel.activeFilePath.collectAsState()
 
-    // Load the selected GGUF models into the dual inference engine
     val selectedModelA by modelsViewModel.selectedModelA.collectAsState()
     val selectedModelB by modelsViewModel.selectedModelB.collectAsState()
     val currentSettings by settingsViewModel.settings.collectAsState()
-    
+
     LaunchedEffect(selectedModelA, currentSettings) {
         selectedModelA?.let { model ->
             dualModelManager.loadModelA(
@@ -149,7 +161,6 @@ fun AppShell(
         }
     }
 
-    // Sync editor when active file changes
     LaunchedEffect(activeProject, activeFilePath) {
         val proj = activeProject
         val path = activeFilePath
@@ -158,7 +169,6 @@ fun AppShell(
         }
     }
 
-    // Start local web preview server for active project
     LaunchedEffect(activeProject) {
         val proj = activeProject
         if (proj != null) {
@@ -167,53 +177,117 @@ fun AppShell(
     }
 
     val destinations = listOf(
-        NavigationDestination.Chat to Icons.Default.Code,
-        NavigationDestination.Projects to Icons.Default.Folder,
-        NavigationDestination.Editor to Icons.Default.Code,
-        NavigationDestination.Preview to Icons.Default.PlayArrow,
-        NavigationDestination.Terminal to Icons.Default.Build,
-        NavigationDestination.Models to Icons.Default.Build,
-        NavigationDestination.Settings to Icons.Default.SettingsIcon,
+        NavItem(NavigationDestination.Chat, Icons.Default.Chat, "Chat"),
+        NavItem(NavigationDestination.Projects, Icons.Default.Folder, "Files"),
+        NavItem(NavigationDestination.Editor, Icons.Default.Code, "Code"),
+        NavItem(NavigationDestination.Preview, Icons.Default.PlayArrow, "Play"),
+        NavItem(NavigationDestination.Terminal, Icons.Default.Terminal, "Term"),
+        NavItem(NavigationDestination.Models, Icons.Default.Memory, "LLM"),
+        NavItem(NavigationDestination.Settings, Icons.Default.SettingsIcon, "Set"),
     )
 
+    val colorScheme = MaterialTheme.colorScheme
+
     Scaffold(
+        containerColor = colorScheme.background,
+        contentColor = colorScheme.onBackground,
         topBar = {
             if (!isPreviewFullscreen) {
                 TopAppBar(
-                    title = { Text(selectedDestination.title) },
+                    title = {
+                        Column {
+                            Text(
+                                text = "OFFLINE STUDIO",
+                                style = MaterialTheme.typography.labelSmall.copy(
+                                    fontFamily = FontFamily.Monospace,
+                                    letterSpacing = 1.2.sp,
+                                    color = colorScheme.onSurfaceVariant,
+                                ),
+                            )
+                            Text(
+                                text = selectedDestination.title,
+                                style = MaterialTheme.typography.titleSmall.copy(
+                                    fontWeight = FontWeight.Medium,
+                                ),
+                            )
+                        }
+                    },
+                    actions = {
+                        // OS monogram badge — matches web rail logo
+                        Surface(
+                            color = colorScheme.surfaceVariant,
+                            shape = RoundedCornerShape(6.dp),
+                            modifier = Modifier.padding(end = 12.dp),
+                        ) {
+                            Text(
+                                text = "OS",
+                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                                style = MaterialTheme.typography.labelSmall.copy(
+                                    fontFamily = FontFamily.Monospace,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = PrimaryCyan,
+                                ),
+                            )
+                        }
+                    },
                     colors = TopAppBarDefaults.topAppBarColors(
-                        containerColor = MaterialTheme.colorScheme.primaryContainer,
-                        titleContentColor = MaterialTheme.colorScheme.onPrimaryContainer,
-                    )
+                        containerColor = colorScheme.surface,
+                        titleContentColor = colorScheme.onSurface,
+                        actionIconContentColor = colorScheme.onSurfaceVariant,
+                    ),
                 )
             }
         },
         bottomBar = {
             if (!isPreviewFullscreen) {
-                NavigationBar {
-                    destinations.forEach { (destination, icon) ->
+                NavigationBar(
+                    containerColor = colorScheme.surface,
+                    contentColor = colorScheme.onSurfaceVariant,
+                    tonalElevation = 0.dp,
+                ) {
+                    destinations.forEach { item ->
+                        val selected = selectedDestination == item.destination
                         NavigationBarItem(
-                            icon = { Icon(icon, contentDescription = destination.title) },
-                            label = { Text(destination.title) },
-                            selected = selectedDestination == destination,
-                            onClick = { selectedDestination = destination }
+                            icon = {
+                                Icon(
+                                    item.icon,
+                                    contentDescription = item.destination.title,
+                                )
+                            },
+                            label = {
+                                Text(
+                                    text = item.shortLabel,
+                                    maxLines = 1,
+                                    style = MaterialTheme.typography.labelSmall,
+                                )
+                            },
+                            selected = selected,
+                            onClick = { selectedDestination = item.destination },
+                            colors = NavigationBarItemDefaults.colors(
+                                selectedIconColor = PrimaryCyan,
+                                selectedTextColor = PrimaryCyan,
+                                indicatorColor = colorScheme.surfaceVariant,
+                                unselectedIconColor = colorScheme.onSurfaceVariant,
+                                unselectedTextColor = colorScheme.onSurfaceVariant,
+                            ),
                         )
                     }
                 }
             }
-        }
+        },
     ) { paddingValues ->
         Box(
             modifier = Modifier
                 .fillMaxSize()
+                .background(colorScheme.background)
                 .padding(paddingValues)
-                .padding(if (isPreviewFullscreen) 0.dp else 16.dp)
+                .padding(if (isPreviewFullscreen) 0.dp else 8.dp)
         ) {
             when (selectedDestination) {
                 NavigationDestination.Chat -> ChatScreen(
                     viewModel = chatViewModel,
                     activeProjectDir = activeProject?.let { File(it.path) },
-                    selectedModelPath = selectedModelA?.path, // Fallback for single mode compat
+                    selectedModelPath = selectedModelA?.path,
                     systemPrompt = currentSettings.systemPrompt,
                     onProjectCreated = { projectsViewModel.loadProjectsFromWorkspace() }
                 )
