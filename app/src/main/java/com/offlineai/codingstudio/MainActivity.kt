@@ -7,6 +7,7 @@ import android.os.Build
 import android.os.Bundle
 import android.os.Environment
 import android.provider.Settings
+import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
@@ -58,14 +59,18 @@ import java.io.File
 
 class MainActivity : ComponentActivity() {
 
+    companion object {
+        private const val TAG = "MainActivity"
+    }
+
     private val requestPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
     ) { _ -> }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        Log.i(TAG, "onCreate start")
 
-        // Request standard runtime permissions gracefully if needed on Android 10 and below
         if (Build.VERSION.SDK_INT <= Build.VERSION_CODES.Q) {
             try {
                 requestPermissionLauncher.launch(
@@ -75,12 +80,16 @@ class MainActivity : ComponentActivity() {
                     )
                 )
             } catch (e: Exception) {
-                // Ignore permission request failures
+                Log.w(TAG, "Permission request failed: ${e.message}")
             }
         }
 
+        // Do NOT auto-open MANAGE_ALL_FILES on launch — that can look like a crash / bounce
+        // User can grant storage from Models tab when needed.
+
         try {
             val workspaceManager = WorkspaceManager(applicationContext.filesDir)
+            // Native load is deferred inside LlamaEngineNative companion (catch UnsatisfiedLinkError)
             val inferenceEngine = LlamaEngineNative()
             val dualModelManager = DualModelManager(applicationContext, inferenceEngine)
             val projectsViewModel = ProjectsViewModel(workspaceManager)
@@ -90,6 +99,8 @@ class MainActivity : ComponentActivity() {
             val terminalViewModel = TerminalViewModel()
             val modelsViewModel = ModelsViewModel(workspaceManager)
             val settingsViewModel = SettingsViewModel(applicationContext.settingsDataStore)
+
+            Log.i(TAG, "ViewModels created, setting content. nativeAvailable=${LlamaEngineNative.isNativeAvailable()}")
 
             setContent {
                 OfflineAITheme {
@@ -107,7 +118,7 @@ class MainActivity : ComponentActivity() {
                 }
             }
         } catch (e: Throwable) {
-            android.util.Log.e("MainActivity", "Error during initialization: ${e.message}", e)
+            Log.e(TAG, "Fatal init error: ${e.message}", e)
             setContent {
                 MaterialTheme {
                     Surface(
@@ -129,9 +140,14 @@ class MainActivity : ComponentActivity() {
                             )
                             Spacer(Modifier.height(16.dp))
                             Text(
-                                text = "Initialization Notice:\n${e.localizedMessage ?: e.message ?: "Unknown error"}",
+                                text = "Startup error:\n${e.javaClass.simpleName}\n${e.localizedMessage ?: e.message ?: "Unknown"}",
                                 style = MaterialTheme.typography.bodyMedium,
                                 color = MaterialTheme.colorScheme.error
+                            )
+                            Spacer(Modifier.height(8.dp))
+                            Text(
+                                text = "Tip: rebuild without a broken libllama_engine.so, or remove jniLibs and use CPU later.",
+                                style = MaterialTheme.typography.bodySmall
                             )
                             Spacer(Modifier.height(16.dp))
                             Button(onClick = { recreate() }) {
@@ -166,6 +182,8 @@ fun AppShell(
 ) {
     var selectedDestination by remember { mutableStateOf<NavigationDestination>(NavigationDestination.Chat) }
     var isPreviewFullscreen by remember { mutableStateOf(false) }
+    var modelLoadError by remember { mutableStateOf<String?>(null) }
+
     val activeProject by projectsViewModel.activeProject.collectAsState()
     val activeFilePath by projectsViewModel.activeFilePath.collectAsState()
 
@@ -173,25 +191,43 @@ fun AppShell(
     val selectedModelB by modelsViewModel.selectedModelB.collectAsState()
     val currentSettings by settingsViewModel.settings.collectAsState()
 
-    LaunchedEffect(selectedModelA, currentSettings) {
-        selectedModelA?.let { model ->
-            val layers = if (currentSettings.useGpu) currentSettings.gpuLayers else 0
-            dualModelManager.loadModelA(
+    // Load model only when user selected one — catch failures so UI stays open
+    LaunchedEffect(selectedModelA, currentSettings.contextSize, currentSettings.useGpu, currentSettings.gpuLayers) {
+        val model = selectedModelA ?: return@LaunchedEffect
+        try {
+            // GPU off by default in settings; never force 99 layers on first open
+            val layers = if (currentSettings.useGpu) currentSettings.gpuLayers.coerceIn(0, 99) else 0
+            val ctx = currentSettings.contextSize.coerceIn(512, 8192)
+            Log.i("AppShell", "Loading Model A: ${model.name} ctx=$ctx gpuLayers=$layers")
+            val result = dualModelManager.loadModelA(
                 modelPath = model.path,
-                contextSize = currentSettings.contextSize,
+                contextSize = ctx,
                 gpuLayers = layers
             )
+            if (result.isFailure) {
+                modelLoadError = result.exceptionOrNull()?.message ?: "Failed to load model A"
+                Log.e("AppShell", "Model A load failed: $modelLoadError")
+            } else {
+                modelLoadError = null
+            }
+        } catch (e: Throwable) {
+            modelLoadError = e.message ?: e.javaClass.simpleName
+            Log.e("AppShell", "Model A load crashed: ${e.message}", e)
         }
     }
 
-    LaunchedEffect(selectedModelB, currentSettings) {
-        selectedModelB?.let { model ->
-            val layers = if (currentSettings.useGpu) currentSettings.gpuLayers else 0
+    LaunchedEffect(selectedModelB, currentSettings.contextSize, currentSettings.useGpu, currentSettings.gpuLayers) {
+        val model = selectedModelB ?: return@LaunchedEffect
+        try {
+            val layers = if (currentSettings.useGpu) currentSettings.gpuLayers.coerceIn(0, 99) else 0
+            val ctx = currentSettings.contextSize.coerceIn(512, 8192)
             dualModelManager.loadModelB(
                 modelPath = model.path,
-                contextSize = currentSettings.contextSize,
+                contextSize = ctx,
                 gpuLayers = layers
             )
+        } catch (e: Throwable) {
+            Log.e("AppShell", "Model B load failed: ${e.message}", e)
         }
     }
 
@@ -199,14 +235,22 @@ fun AppShell(
         val proj = activeProject
         val path = activeFilePath
         if (proj != null && path != null) {
-            editorViewModel.loadFile(File(proj.path), path)
+            try {
+                editorViewModel.loadFile(File(proj.path), path)
+            } catch (e: Exception) {
+                Log.w("AppShell", "loadFile: ${e.message}")
+            }
         }
     }
 
     LaunchedEffect(activeProject) {
         val proj = activeProject
         if (proj != null) {
-            previewViewModel.startServerForProject(File(proj.path))
+            try {
+                previewViewModel.startServerForProject(File(proj.path))
+            } catch (e: Exception) {
+                Log.w("AppShell", "preview: ${e.message}")
+            }
         }
     }
 
@@ -309,37 +353,56 @@ fun AppShell(
             }
         },
     ) { paddingValues ->
-        Box(
+        Column(
             modifier = Modifier
                 .fillMaxSize()
                 .background(colorScheme.background)
                 .padding(paddingValues)
-                .padding(if (isPreviewFullscreen) 0.dp else 8.dp)
         ) {
-            when (selectedDestination) {
-                NavigationDestination.Chat -> ChatScreen(
-                    viewModel = chatViewModel,
-                    activeProjectDir = activeProject?.let { File(it.path) },
-                    selectedModelPath = selectedModelA?.path,
-                    systemPrompt = currentSettings.systemPrompt,
-                    onProjectCreated = { projectsViewModel.loadProjectsFromWorkspace() }
-                )
-                NavigationDestination.Projects -> ProjectsScreen(viewModel = projectsViewModel)
-                NavigationDestination.Editor -> EditorScreen(
-                    viewModel = editorViewModel,
-                    selectedModelPath = selectedModelA?.path
-                )
-                NavigationDestination.Preview -> PreviewScreen(
-                    viewModel = previewViewModel,
-                    isFullscreen = isPreviewFullscreen,
-                    onToggleFullscreen = { isPreviewFullscreen = !isPreviewFullscreen }
-                )
-                NavigationDestination.Terminal -> TerminalScreen(
-                    viewModel = terminalViewModel,
-                    workingDir = activeProject?.let { File(it.path) }
-                )
-                NavigationDestination.Models -> ModelsScreen(viewModel = modelsViewModel)
-                NavigationDestination.Settings -> SettingsScreen(viewModel = settingsViewModel)
+            modelLoadError?.let { err ->
+                Surface(
+                    color = MaterialTheme.colorScheme.errorContainer,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text(
+                        text = "Model load issue: $err",
+                        modifier = Modifier.padding(8.dp),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onErrorContainer
+                    )
+                }
+            }
+            Box(
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxWidth()
+                    .padding(if (isPreviewFullscreen) 0.dp else 8.dp)
+            ) {
+                when (selectedDestination) {
+                    NavigationDestination.Chat -> ChatScreen(
+                        viewModel = chatViewModel,
+                        activeProjectDir = activeProject?.let { File(it.path) },
+                        selectedModelPath = selectedModelA?.path,
+                        systemPrompt = currentSettings.systemPrompt,
+                        onProjectCreated = { projectsViewModel.loadProjectsFromWorkspace() }
+                    )
+                    NavigationDestination.Projects -> ProjectsScreen(viewModel = projectsViewModel)
+                    NavigationDestination.Editor -> EditorScreen(
+                        viewModel = editorViewModel,
+                        selectedModelPath = selectedModelA?.path
+                    )
+                    NavigationDestination.Preview -> PreviewScreen(
+                        viewModel = previewViewModel,
+                        isFullscreen = isPreviewFullscreen,
+                        onToggleFullscreen = { isPreviewFullscreen = !isPreviewFullscreen }
+                    )
+                    NavigationDestination.Terminal -> TerminalScreen(
+                        viewModel = terminalViewModel,
+                        workingDir = activeProject?.let { File(it.path) }
+                    )
+                    NavigationDestination.Models -> ModelsScreen(viewModel = modelsViewModel)
+                    NavigationDestination.Settings -> SettingsScreen(viewModel = settingsViewModel)
+                }
             }
         }
     }

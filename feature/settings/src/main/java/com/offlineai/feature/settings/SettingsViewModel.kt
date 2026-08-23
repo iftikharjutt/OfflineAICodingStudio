@@ -13,17 +13,16 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 
 data class AppSettings(
-    val contextSize: Int = 4096,
+    val contextSize: Int = 2048,
     val threadCount: Int = 4,
     val isDarkMode: Boolean = true,
     val fontSize: Int = 14,
     val autoSaveOnPreview: Boolean = true,
     val systemPrompt: String = "You are a helpful expert AI coding assistant.",
     val useModelBForReviewAndDebug: Boolean = false,
-    /** When true, offload layers to GPU (needs Vulkan-built llama_engine.so). */
-    val useGpu: Boolean = true,
-    /** Layers to offload; 99 = all. Ignored when useGpu is false. */
-    val gpuLayers: Int = 99
+    /** Default OFF so a broken Vulkan .so / OOM cannot kill the app on first open. */
+    val useGpu: Boolean = false,
+    val gpuLayers: Int = 20
 )
 
 class SettingsViewModel(
@@ -49,14 +48,14 @@ class SettingsViewModel(
             viewModelScope.launch {
                 store.data.collect { prefs ->
                     _settings.value = AppSettings(
-                        contextSize = prefs[Keys.CONTEXT_SIZE] ?: 4096,
+                        contextSize = prefs[Keys.CONTEXT_SIZE] ?: 2048,
                         threadCount = prefs[Keys.THREAD_COUNT] ?: 4,
                         isDarkMode = prefs[Keys.DARK_MODE] ?: true,
                         autoSaveOnPreview = prefs[Keys.AUTO_SAVE] ?: true,
                         systemPrompt = prefs[Keys.SYSTEM_PROMPT] ?: "You are a helpful expert AI coding assistant.",
                         useModelBForReviewAndDebug = prefs[Keys.USE_MODEL_B] ?: false,
-                        useGpu = prefs[Keys.USE_GPU] ?: true,
-                        gpuLayers = prefs[Keys.GPU_LAYERS] ?: 99
+                        useGpu = prefs[Keys.USE_GPU] ?: false,
+                        gpuLayers = prefs[Keys.GPU_LAYERS] ?: 20
                     )
                 }
             }
@@ -116,11 +115,5 @@ class SettingsViewModel(
     fun updateGpuLayers(layers: Int) {
         _settings.value = _settings.value.copy(gpuLayers = layers.coerceIn(0, 99))
         persist(_settings.value)
-    }
-
-    /** Effective layers to pass to native load (0 if GPU disabled). */
-    fun effectiveGpuLayers(): Int {
-        val s = _settings.value
-        return if (s.useGpu) s.gpuLayers else 0
     }
 }

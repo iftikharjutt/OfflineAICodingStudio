@@ -1,6 +1,7 @@
 package com.offlineai.feature.modelsmanager
 
 import android.os.Environment
+import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.offlineai.core.filesystem.WorkspaceManager
@@ -37,64 +38,80 @@ class ModelsViewModel(
     val scanMessage: StateFlow<String> = _scanMessage.asStateFlow()
 
     init {
-        loadModelsFromWorkspace()
+        // Scan only — do NOT auto-select / auto-load a 7B model (that OOM-kills the process on open)
+        loadModelsFromWorkspace(autoSelectFirst = false)
     }
 
-    fun loadModelsFromWorkspace() {
+    fun loadModelsFromWorkspace(autoSelectFirst: Boolean = false) {
         viewModelScope.launch {
             withContext(Dispatchers.IO) {
-                val modelsDir: File = workspaceManager.modelsDir
-                if (!modelsDir.exists()) modelsDir.mkdirs()
+                try {
+                    val modelsDir: File = workspaceManager.modelsDir
+                    if (!modelsDir.exists()) modelsDir.mkdirs()
 
-                val publicDownloads = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
+                    val publicDownloads = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
 
-                val searchPaths = listOf(
-                    modelsDir,
-                    publicDownloads,
-                    File("/sdcard/Download"),
-                    File("/storage/emulated/0/Download"),
-                    File("/sdcard/OfflineAICodingStudio/Models"),
-                    File("/data/data/com.termux/files/home/OfflineAICodingStudio/Workspace/Models")
-                )
+                    val searchPaths = listOf(
+                        modelsDir,
+                        publicDownloads,
+                        File("/sdcard/Download"),
+                        File("/storage/emulated/0/Download"),
+                        File("/sdcard/OfflineAICodingStudio/Models"),
+                        File("/data/data/com.termux/files/home/OfflineAICodingStudio/Workspace/Models")
+                    )
 
-                val allFoundModels = mutableListOf<File>()
+                    val allFoundModels = mutableListOf<File>()
 
-                for (dir in searchPaths) {
-                    try {
-                        if (dir.exists() && dir.canRead()) {
-                            val ggufFiles = dir.listFiles()?.filter { f -> f.isFile && (f.extension.equals("gguf", ignoreCase = true) || f.extension.equals("bin", ignoreCase = true)) } ?: emptyList()
-                            for (file in ggufFiles) {
-                                if (allFoundModels.none { it.name == file.name }) {
-                                    allFoundModels.add(file)
+                    for (dir in searchPaths) {
+                        try {
+                            if (dir.exists() && dir.canRead()) {
+                                val ggufFiles = dir.listFiles()?.filter { f ->
+                                    f.isFile && (
+                                        f.extension.equals("gguf", ignoreCase = true) ||
+                                            f.extension.equals("bin", ignoreCase = true)
+                                        )
+                                } ?: emptyList()
+                                for (file in ggufFiles) {
+                                    if (allFoundModels.none { it.name == file.name }) {
+                                        allFoundModels.add(file)
+                                    }
                                 }
                             }
+                        } catch (e: Exception) {
+                            Log.w("ModelsViewModel", "Skip path ${dir.path}: ${e.message}")
                         }
-                    } catch (e: Exception) {
-                        // Skip inaccessible path
                     }
-                }
 
-                val list: List<GgufModelInfo> = allFoundModels.map { f ->
-                    GgufModelInfo(
-                        name = f.name,
-                        path = f.absolutePath,
-                        sizeBytes = f.length(),
-                        isSelectedA = (_selectedModelA.value?.path == f.absolutePath),
-                        isSelectedB = (_selectedModelB.value?.path == f.absolutePath)
-                    )
-                }
+                    val aPath = _selectedModelA.value?.path
+                    val bPath = _selectedModelB.value?.path
 
-                _availableModels.value = list
-                if (list.isNotEmpty() && (_selectedModelA.value == null || list.none { it.isSelectedA })) {
-                    val defaultModel = list.first().copy(isSelectedA = true)
-                    _selectedModelA.value = defaultModel
-                    _availableModels.value = list.map { it.copy(isSelectedA = (it.path == defaultModel.path)) }
-                }
+                    val list: List<GgufModelInfo> = allFoundModels.map { f ->
+                        GgufModelInfo(
+                            name = f.name,
+                            path = f.absolutePath,
+                            sizeBytes = f.length(),
+                            isSelectedA = (aPath == f.absolutePath),
+                            isSelectedB = (bPath == f.absolutePath)
+                        )
+                    }
 
-                _scanMessage.value = if (list.isNotEmpty()) {
-                    "Found ${list.size} model(s)! Selected A: ${list.firstOrNull { it.isSelectedA }?.name ?: list.first().name}"
-                } else {
-                    "Scanned 6 storage locations. Please grant Storage Permission or place .gguf in Downloads."
+                    _availableModels.value = list
+
+                    // Only auto-select if explicitly requested AND no selection yet
+                    if (autoSelectFirst && list.isNotEmpty() && _selectedModelA.value == null) {
+                        val defaultModel = list.first().copy(isSelectedA = true)
+                        _selectedModelA.value = defaultModel
+                        _availableModels.value = list.map { it.copy(isSelectedA = (it.path == defaultModel.path)) }
+                    }
+
+                    _scanMessage.value = if (list.isNotEmpty()) {
+                        "Found ${list.size} model(s). Tap a model to load as A (do not auto-load on start)."
+                    } else {
+                        "No .gguf found. Place models in Downloads or Workspace/Models, then Scan."
+                    }
+                } catch (e: Exception) {
+                    Log.e("ModelsViewModel", "Scan failed: ${e.message}", e)
+                    _scanMessage.value = "Scan error: ${e.message}"
                 }
             }
         }
@@ -107,6 +124,11 @@ class ModelsViewModel(
 
     fun selectModelB(model: GgufModelInfo) {
         _selectedModelB.value = model.copy(isSelectedB = true)
+        updateList()
+    }
+
+    fun clearSelectionA() {
+        _selectedModelA.value = null
         updateList()
     }
 
