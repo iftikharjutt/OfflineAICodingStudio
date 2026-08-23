@@ -14,7 +14,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install Vulkan / glslang deps & SPIRV-Headers
+      - name: Install Vulkan / glslang deps & Headers
         run: |
           sudo apt-get update
           sudo apt-get install -y \
@@ -26,6 +26,10 @@ jobs:
           git clone --depth 1 https://github.com/KhronosGroup/SPIRV-Headers.git
           cmake -B SPIRV-Headers/build -S SPIRV-Headers -DCMAKE_INSTALL_PREFIX=$GITHUB_WORKSPACE/spirv-headers-install
           cmake --install SPIRV-Headers/build
+
+          git clone --depth 1 https://github.com/KhronosGroup/Vulkan-Headers.git
+          cmake -B Vulkan-Headers/build -S Vulkan-Headers -DCMAKE_INSTALL_PREFIX=$GITHUB_WORKSPACE/vulkan-headers-install
+          cmake --install Vulkan-Headers/build
 
       - name: Setup Android NDK Environment
         run: |
@@ -62,8 +66,10 @@ jobs:
             -DGGML_VULKAN=ON \
             -DGGML_LLAMAFILE=OFF \
             -DCMAKE_FIND_ROOT_PATH_MODE_PACKAGE=BOTH \
-            -DCMAKE_PREFIX_PATH=$GITHUB_WORKSPACE/spirv-headers-install \
-            -DSPIRV-Headers_DIR=$GITHUB_WORKSPACE/spirv-headers-install/share/cmake/SPIRV-Headers
+            -DCMAKE_PREFIX_PATH="$GITHUB_WORKSPACE/spirv-headers-install;$GITHUB_WORKSPACE/vulkan-headers-install" \
+            -DSPIRV-Headers_DIR=$GITHUB_WORKSPACE/spirv-headers-install/share/cmake/SPIRV-Headers \
+            -DVulkan_INCLUDE_DIR=$GITHUB_WORKSPACE/vulkan-headers-install/include \
+            -DCMAKE_CXX_FLAGS="-I$GITHUB_WORKSPACE/vulkan-headers-install/include"
           cmake --build build-android --config Release -j$(nproc) --target llama
 
       - name: Build JNI bridge -> libllama_engine.so

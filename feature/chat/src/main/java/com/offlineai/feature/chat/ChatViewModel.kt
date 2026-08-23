@@ -310,7 +310,7 @@ class ChatViewModel(
             val projectName = "AIGeneratedProject_${System.currentTimeMillis()}"
             val filesWritten = mutableListOf<String>()
             try {
-                val fenceRegex = Regex("```([a-zA-Z0-9_+.-]*)\n([\s\S]*?)```")
+                val fenceRegex = Regex("""```([a-zA-Z0-9_+.-]*)\n([\s\S]*?)```""")
                 val fences = fenceRegex.findAll(rawText).map { match ->
                     match.groupValues[1].lowercase().trim() to match.groupValues[2].trim()
                 }.toList()
@@ -342,14 +342,14 @@ class ChatViewModel(
                     }
                     if (htmlContent != null) {
                         if (cssContent == null) {
-                            val styleMatch = Regex("<style[^>]*>([\s\S]*?)</style>", RegexOption.IGNORE_CASE).find(htmlContent!!)
+                            val styleMatch = Regex("""<style[^>]*>([\s\S]*?)</style>""", RegexOption.IGNORE_CASE).find(htmlContent!!)
                             if (styleMatch != null) {
                                 cssContent = styleMatch.groupValues[1].trim()
                                 htmlContent = htmlContent!!.replace(styleMatch.value, "")
                             }
                         }
                         if (jsContent == null) {
-                            val scriptMatch = Regex("<script(?![^>]*\bsrc=)[^>]*>([\s\S]*?)</script>", RegexOption.IGNORE_CASE).find(htmlContent!!)
+                            val scriptMatch = Regex("""<script(?![^>]*\bsrc=)[^>]*>([\s\S]*?)</script>""", RegexOption.IGNORE_CASE).find(htmlContent!!)
                             if (scriptMatch != null && scriptMatch.groupValues[1].isNotBlank()) {
                                 jsContent = scriptMatch.groupValues[1].trim()
                                 htmlContent = htmlContent!!.replace(scriptMatch.value, "")
