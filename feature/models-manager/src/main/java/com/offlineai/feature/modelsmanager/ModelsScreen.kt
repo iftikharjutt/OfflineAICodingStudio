@@ -67,6 +67,7 @@ fun ModelsScreen(
         HorizontalDivider()
 
         if (availableModels.isEmpty()) {
+            val context = androidx.compose.ui.platform.LocalContext.current
             Card(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -82,14 +83,31 @@ fun ModelsScreen(
                     Text("No GGUF models detected", style = MaterialTheme.typography.titleSmall)
                     Spacer(Modifier.height(4.dp))
                     Text(
-                        "Scanned model module directories:\n" +
+                        "Scanned model locations:\n" +
                         "1. /sdcard/Download/\n" +
-                        "2. /data/data/com.termux/files/home/OfflineAICodingStudio/Workspace/Models/\n" +
-                        "3. /data/data/com.termux/files/home/OfflineAICodingStudio/ai/runtime/src/main/assets/models/\n" +
-                        "4. App Workspace Internal Storage\n\n" +
-                        "Tap 'Scan Models' above to rescan.",
+                        "2. Internal App Storage\n\n" +
+                        "Place your .gguf model in Downloads and tap 'Scan Models'.",
                         style = MaterialTheme.typography.bodySmall
                     )
+                    
+                    if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.R && !android.os.Environment.isExternalStorageManager()) {
+                        Spacer(Modifier.height(12.dp))
+                        Button(
+                            onClick = {
+                                try {
+                                    val intent = android.content.Intent(android.provider.Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION).apply {
+                                        data = android.net.Uri.parse("package:${context.packageName}")
+                                    }
+                                    context.startActivity(intent)
+                                } catch (e: Exception) {
+                                    val intent = android.content.Intent(android.provider.Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION)
+                                    context.startActivity(intent)
+                                }
+                            }
+                        ) {
+                            Text("Grant Storage Access")
+                        }
+                    }
                 }
             }
         } else {
