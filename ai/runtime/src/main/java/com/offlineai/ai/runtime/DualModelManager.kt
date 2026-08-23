@@ -21,15 +21,17 @@ class DualModelManager(
     private val MIN_RAM_FOR_DUAL_BYTES = 1536L * 1024L * 1024L
 
     fun getAvailableRAM(): Long {
-        val am = context.getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager
+        val am = context.getSystemService(Context.ACTIVITY_SERVICE) as? ActivityManager
         val mi = ActivityManager.MemoryInfo()
-        am.getMemoryInfo(mi)
+        am?.getMemoryInfo(mi)
 
         var nativeRam: Long = -1L
-        try {
-            nativeRam = inferenceEngine.nativeGetAvailableRAM()
-        } catch (e: Throwable) {
-            Log.e(TAG, "Failed to call nativeGetAvailableRAM: ${e.message}")
+        if (LlamaEngineNative.isNativeAvailable()) {
+            try {
+                nativeRam = inferenceEngine.nativeGetAvailableRAM()
+            } catch (e: Throwable) {
+                Log.e(TAG, "Failed to call nativeGetAvailableRAM: ${e.message}")
+            }
         }
 
         return if (mi.availMem > 0) mi.availMem else nativeRam
