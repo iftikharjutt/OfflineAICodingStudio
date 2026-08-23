@@ -69,7 +69,7 @@ jobs:
             -DCMAKE_PREFIX_PATH="$GITHUB_WORKSPACE/spirv-headers-install;$GITHUB_WORKSPACE/vulkan-headers-install" \
             -DSPIRV-Headers_DIR=$GITHUB_WORKSPACE/spirv-headers-install/share/cmake/SPIRV-Headers \
             -DVulkan_INCLUDE_DIR=$GITHUB_WORKSPACE/vulkan-headers-install/include \
-            -DCMAKE_CXX_FLAGS="-I$GITHUB_WORKSPACE/vulkan-headers-install/include"
+            -DCMAKE_CXX_FLAGS="-I$GITHUB_WORKSPACE/vulkan-headers-install/include -I$GITHUB_WORKSPACE/spirv-headers-install/include"
           cmake --build build-android --config Release -j$(nproc) --target llama
 
       - name: Build JNI bridge -> libllama_engine.so
