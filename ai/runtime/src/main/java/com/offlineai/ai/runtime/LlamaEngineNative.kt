@@ -6,6 +6,8 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOn
 import java.io.File
+import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.atomic.AtomicBoolean
 
 class LlamaEngineNative : LlamaInferenceEngine {
 
@@ -33,7 +35,9 @@ class LlamaEngineNative : LlamaInferenceEngine {
     private external fun nativeGenerateToken(sessionId: String, prompt: String, isFirstToken: Boolean): String
     external fun nativeGetAvailableRAM(): Long
 
-    private val activeSessions = java.util.concurrent.ConcurrentHashMap<String, ModelSession>()
+    private val activeSessions = ConcurrentHashMap<String, ModelSession>()
+    /** Per-session cancel flags so stopGeneration() can halt token loops. */
+    private val cancelFlags = ConcurrentHashMap<String, AtomicBoolean>()
 
     override suspend fun loadModel(request: ModelLoadRequest): Result<ModelSession> {
         if (!nativeAvailable) {
@@ -68,6 +72,7 @@ class LlamaEngineNative : LlamaInferenceEngine {
                 loadedAt = System.currentTimeMillis()
             )
             activeSessions[sessionId] = session
+            cancelFlags[sessionId] = AtomicBoolean(false)
             Log.i(TAG, "Model loaded successfully: sessionID=$sessionId, loadTime=${loadDuration}ms")
             Result.success(session)
         } catch (e: Exception) {
@@ -86,6 +91,7 @@ class LlamaEngineNative : LlamaInferenceEngine {
             }
         }
         activeSessions.remove(sessionId)
+        cancelFlags.remove(sessionId)
     }
 
     override fun streamCompletion(request: CompletionRequest): Flow<TokenEvent> = flow {
@@ -106,6 +112,10 @@ class LlamaEngineNative : LlamaInferenceEngine {
 
         require(request.prompt.isNotBlank()) { "Completion prompt cannot be blank" }
 
+        // Reset cancel flag for this generation
+        val flag = cancelFlags.getOrPut(session.sessionId) { AtomicBoolean(false) }
+        flag.set(false)
+
         val stopTokens = request.stopSequences.filter { it.isNotBlank() }
         val startTime = System.currentTimeMillis()
         var generatedCount = 0
@@ -116,6 +126,13 @@ class LlamaEngineNative : LlamaInferenceEngine {
             val accumulated = StringBuilder()
 
             while (!isComplete) {
+                // Honor user / auto stop
+                if (flag.get()) {
+                    Log.i(TAG, "streamCompletion cancelled via cancel flag for session ${session.sessionId}")
+                    emit(TokenEvent.Cancelled)
+                    return@flow
+                }
+
                 // Fix: Only pass prompt on first token to avoid JNI string overhead
                 val promptArg = if (isFirst) request.prompt else ""
                 val isFirstCall = isFirst
@@ -138,10 +155,10 @@ class LlamaEngineNative : LlamaInferenceEngine {
 
                     val matchesStop = stopTokens.any { stopSequence ->
                         stopSequence.isNotBlank() && (
-                            token == stopSequence || 
-                            token.contains(stopSequence) || 
-                            currentStr.endsWith(stopSequence)
-                        )
+                            token == stopSequence ||
+                                token.contains(stopSequence) ||
+                                currentStr.endsWith(stopSequence)
+                            )
                     }
 
                     if (matchesStop) {
@@ -180,5 +197,10 @@ class LlamaEngineNative : LlamaInferenceEngine {
 
     override suspend fun cancel(sessionId: String) {
         Log.i(TAG, "Cancellation requested for session: $sessionId")
+        cancelFlags[sessionId]?.set(true)
+        // Also mark all sessions if id not found (defensive for dual-mode)
+        if (!cancelFlags.containsKey(sessionId)) {
+            cancelFlags.values.forEach { it.set(true) }
+        }
     }
 }
