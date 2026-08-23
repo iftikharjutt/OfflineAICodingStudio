@@ -12,7 +12,9 @@ import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Chat
 import androidx.compose.material.icons.filled.Code
@@ -77,30 +79,67 @@ class MainActivity : ComponentActivity() {
             }
         }
 
-        val workspaceManager = WorkspaceManager(applicationContext.filesDir)
-        val inferenceEngine = LlamaEngineNative()
-        val dualModelManager = DualModelManager(applicationContext, inferenceEngine)
-        val projectsViewModel = ProjectsViewModel(workspaceManager)
-        val editorViewModel = EditorViewModel(workspaceManager, inferenceEngine)
-        val previewViewModel = PreviewViewModel(workspaceManager, dualModelManager)
-        val chatViewModel = ChatViewModel(workspaceManager, dualModelManager)
-        val terminalViewModel = TerminalViewModel()
-        val modelsViewModel = ModelsViewModel(workspaceManager)
-        val settingsViewModel = SettingsViewModel(applicationContext.settingsDataStore)
+        try {
+            val workspaceManager = WorkspaceManager(applicationContext.filesDir)
+            val inferenceEngine = LlamaEngineNative()
+            val dualModelManager = DualModelManager(applicationContext, inferenceEngine)
+            val projectsViewModel = ProjectsViewModel(workspaceManager)
+            val editorViewModel = EditorViewModel(workspaceManager, inferenceEngine)
+            val previewViewModel = PreviewViewModel(workspaceManager, dualModelManager)
+            val chatViewModel = ChatViewModel(workspaceManager, dualModelManager)
+            val terminalViewModel = TerminalViewModel()
+            val modelsViewModel = ModelsViewModel(workspaceManager)
+            val settingsViewModel = SettingsViewModel(applicationContext.settingsDataStore)
 
-        setContent {
-            OfflineAITheme {
-                AppShell(
-                    projectsViewModel = projectsViewModel,
-                    editorViewModel = editorViewModel,
-                    previewViewModel = previewViewModel,
-                    chatViewModel = chatViewModel,
-                    terminalViewModel = terminalViewModel,
-                    modelsViewModel = modelsViewModel,
-                    settingsViewModel = settingsViewModel,
-                    inferenceEngine = inferenceEngine,
-                    dualModelManager = dualModelManager
-                )
+            setContent {
+                OfflineAITheme {
+                    AppShell(
+                        projectsViewModel = projectsViewModel,
+                        editorViewModel = editorViewModel,
+                        previewViewModel = previewViewModel,
+                        chatViewModel = chatViewModel,
+                        terminalViewModel = terminalViewModel,
+                        modelsViewModel = modelsViewModel,
+                        settingsViewModel = settingsViewModel,
+                        inferenceEngine = inferenceEngine,
+                        dualModelManager = dualModelManager
+                    )
+                }
+            }
+        } catch (e: Throwable) {
+            android.util.Log.e("MainActivity", "Error during initialization: ${e.message}", e)
+            setContent {
+                MaterialTheme {
+                    Surface(
+                        modifier = Modifier.fillMaxSize(),
+                        color = MaterialTheme.colorScheme.background
+                    ) {
+                        Column(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .padding(24.dp)
+                                .verticalScroll(rememberScrollState()),
+                            verticalArrangement = Arrangement.Center,
+                            horizontalAlignment = Alignment.CenterHorizontally
+                        ) {
+                            Text(
+                                text = "Offline AI Coding Studio",
+                                style = MaterialTheme.typography.titleLarge,
+                                fontWeight = FontWeight.Bold
+                            )
+                            Spacer(Modifier.height(16.dp))
+                            Text(
+                                text = "Initialization Notice:\n${e.localizedMessage ?: e.message ?: "Unknown error"}",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.error
+                            )
+                            Spacer(Modifier.height(16.dp))
+                            Button(onClick = { recreate() }) {
+                                Text("Retry Launch")
+                            }
+                        }
+                    }
+                }
             }
         }
     }
