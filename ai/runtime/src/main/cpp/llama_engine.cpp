@@ -20,6 +20,7 @@ struct SessionState {
     llama_token    pending = -1;
     llama_pos      n_past  = 0;
     int            last_batch_n = 0;
+    int            gpu_layers = 0;
 };
 static std::map<std::string, SessionState> g_sessions;
 static std::mutex g_sessions_mutex;
@@ -41,7 +42,6 @@ static bool eval_ids(SessionState& st, const std::vector<llama_token>& ids){
     llama_batch batch = llama_batch_init(n_batch, 0, 1);
     size_t i = 0;
     while (i < ids.size()){
-        // Context limit safety check
         if ((uint32_t)st.n_past >= n_ctx) {
             LOGE("Context limit reached: n_past (%d) >= n_ctx (%u)", (int)st.n_past, n_ctx);
             llama_batch_free(batch);
@@ -78,16 +78,12 @@ static llama_token sample_greedy(SessionState& st){
     for (int i = 1; i < n_vocab; ++i) {
         if (logits[i] > bv) { bv = logits[i]; best = i; }
     }
-    
-    // Debug logging for the top predicted token
+
     char buf[128];
     int len = llama_token_to_piece(vocab, best, buf, sizeof(buf), 0, true);
     std::string token_str = (len > 0) ? std::string(buf, len) : "<unknown>";
-    
-    // Check if it's an EOG token
     bool is_eog = llama_vocab_is_eog(vocab, best);
     LOGI("Greedy sample: token_id=%d, logit=%.4f, str='%s', is_eog=%d", best, bv, token_str.c_str(), is_eog);
-    
     return (llama_token)best;
 }
 
@@ -108,17 +104,23 @@ Java_com_offlineai_ai_runtime_LlamaEngineNative_nativeGetAvailableRAM(JNIEnv*, j
 
 JNIEXPORT jstring JNICALL
 Java_com_offlineai_ai_runtime_LlamaEngineNative_nativeLoadModel(
-        JNIEnv* env, jobject, jstring jpath, jint ctxSize, jint threads){
+        JNIEnv* env, jobject, jstring jpath, jint ctxSize, jint threads, jint gpuLayers){
     const char* path = env->GetStringUTFChars(jpath, nullptr);
-    LOGI("nativeLoadModel starting: path=%s, ctxSize=%d, threads=%d", path, ctxSize, threads);
-    
+    LOGI("nativeLoadModel starting: path=%s, ctxSize=%d, threads=%d, gpuLayers=%d",
+         path, ctxSize, threads, gpuLayers);
+
     llama_backend_init();
     llama_model_params mp = llama_model_default_params();
+    // Offload transformer layers to GPU when the native lib was built with GGML_VULKAN.
+    // gpuLayers=0  -> CPU only
+    // gpuLayers=99 -> try all layers (common default for full offload)
+    mp.n_gpu_layers = gpuLayers;
+
     llama_model* model = llama_model_load_from_file(path, mp);
     env->ReleaseStringUTFChars(jpath, path);
-    
+
     if (!model){
-        LOGE("llama_model_load_from_file returned null for path: %s", path);
+        LOGE("llama_model_load_from_file returned null (path may be invalid or OOM)");
         return env->NewStringUTF("");
     }
 
@@ -133,16 +135,20 @@ Java_com_offlineai_ai_runtime_LlamaEngineNative_nativeLoadModel(
         return env->NewStringUTF("");
     }
 
-    SessionState st; st.model = model; st.ctx = ctx;
-    
+    SessionState st;
+    st.model = model;
+    st.ctx = ctx;
+    st.gpu_layers = gpuLayers;
+
     std::string id;
     {
         std::lock_guard<std::mutex> lock(g_sessions_mutex);
         id = "session_" + std::to_string(g_sessions.size() + 1);
         g_sessions[id] = st;
     }
-    
-    LOGI("nativeLoadModel success: assigned sessionID=%s", id.c_str());
+
+    LOGI("nativeLoadModel success: sessionID=%s gpuLayers=%d (0=CPU; >0 needs Vulkan-built .so)",
+         id.c_str(), gpuLayers);
     return env->NewStringUTF(id.c_str());
 }
 
@@ -153,7 +159,7 @@ Java_com_offlineai_ai_runtime_LlamaEngineNative_nativeUnloadModel(
     std::string id(cid);
     env->ReleaseStringUTFChars(jid, cid);
     LOGI("nativeUnloadModel called for session=%s", id.c_str());
-    
+
     std::lock_guard<std::mutex> lock(g_sessions_mutex);
     auto it = g_sessions.find(id);
     if (it == g_sessions.end()) return JNI_FALSE;
@@ -169,7 +175,7 @@ Java_com_offlineai_ai_runtime_LlamaEngineNative_nativeGenerateToken(
     const char* cid = env->GetStringUTFChars(jid, nullptr);
     std::string id(cid);
     env->ReleaseStringUTFChars(jid, cid);
-    
+
     SessionState* st_ptr = nullptr;
     {
         std::lock_guard<std::mutex> lock(g_sessions_mutex);
@@ -180,7 +186,7 @@ Java_com_offlineai_ai_runtime_LlamaEngineNative_nativeGenerateToken(
         }
         st_ptr = &(it->second);
     }
-    
+
     SessionState& st = *st_ptr;
 
     if (isFirstToken){
@@ -188,19 +194,17 @@ Java_com_offlineai_ai_runtime_LlamaEngineNative_nativeGenerateToken(
         st.pending = -1;
         st.n_past = 0;
 
-        // 1. Clear residual KV cache for clean turn evaluation
         if (st.ctx) {
             llama_kv_cache_clear(st.ctx);
         }
 
         const char* p = env->GetStringUTFChars(jprompt, nullptr);
-        // 2. Set add_special = false, parse_special = true
         int n = llama_tokenize(st.model, p, (int)strlen(p), nullptr, 0, false, true);
         if (n < 0) n = -n;
         std::vector<llama_token> toks(n);
         int got = llama_tokenize(st.model, p, (int)strlen(p), toks.data(), (int)toks.size(), false, true);
         env->ReleaseStringUTFChars(jprompt, p);
-        
+
         LOGI("Tokenized prompt into %d tokens (add_special=false, parse_special=true)", got);
         if (got <= 0) {
             LOGE("llama_tokenize returned %d tokens – prompt may be empty or model incompatible", got);
@@ -231,7 +235,6 @@ Java_com_offlineai_ai_runtime_LlamaEngineNative_nativeGenerateToken(
 
     st.pending = t;
     char buf[256];
-    // 3. Set special = true so <|im_end|> is rendered to string for Kotlin stop sequence matching
     int len = llama_token_to_piece(st.model, t, buf, sizeof(buf), 0, true);
     if (len <= 0) return env->NewStringUTF("");
     return env->NewStringUTF(std::string(buf, len).c_str());

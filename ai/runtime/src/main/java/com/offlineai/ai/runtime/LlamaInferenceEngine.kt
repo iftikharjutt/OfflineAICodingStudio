@@ -9,14 +9,20 @@ data class ModelLoadRequest(
     val modelPath: String,
     val contextSize: Int = 8192,
     val threadCount: Int = 4,
-    val useMmap: Boolean = true
+    val useMmap: Boolean = true,
+    /**
+     * Number of transformer layers to offload to GPU (Vulkan).
+     * 0 = CPU only; 99 = try full offload (requires native lib built with GGML_VULKAN).
+     */
+    val gpuLayers: Int = 0
 )
 
 data class ModelSession(
     val sessionId: String,
     val modelPath: String,
     val contextSize: Int,
-    val loadedAt: Long
+    val loadedAt: Long,
+    val gpuLayers: Int = 0
 )
 
 data class CompletionRequest(

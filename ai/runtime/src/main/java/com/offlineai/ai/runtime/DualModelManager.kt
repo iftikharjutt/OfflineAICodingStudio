@@ -11,7 +11,7 @@ class DualModelManager(
     private val inferenceEngine: LlamaEngineNative
 ) {
     private val TAG = "DualModelManager"
-    
+
     var sessionA: ModelSession? = null
         private set
     var sessionB: ModelSession? = null
@@ -24,14 +24,14 @@ class DualModelManager(
         val am = context.getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager
         val mi = ActivityManager.MemoryInfo()
         am.getMemoryInfo(mi)
-        
+
         var nativeRam: Long = -1L
         try {
             nativeRam = inferenceEngine.nativeGetAvailableRAM()
         } catch (e: Throwable) {
             Log.e(TAG, "Failed to call nativeGetAvailableRAM: ${e.message}")
         }
-        
+
         return if (mi.availMem > 0) mi.availMem else nativeRam
     }
 
@@ -40,9 +40,19 @@ class DualModelManager(
         return max(1, cores / 2) // split evenly for dual mode
     }
 
-    suspend fun loadModelA(modelPath: String, contextSize: Int = 2048): Result<ModelSession> {
+    suspend fun loadModelA(
+        modelPath: String,
+        contextSize: Int = 2048,
+        gpuLayers: Int = 0
+    ): Result<ModelSession> {
         val threads = calculateThreads()
-        val request = ModelLoadRequest(modelPath, contextSize, threads)
+        val request = ModelLoadRequest(
+            modelPath = modelPath,
+            contextSize = contextSize,
+            threadCount = threads,
+            gpuLayers = gpuLayers
+        )
+        Log.i(TAG, "loadModelA: gpuLayers=$gpuLayers contextSize=$contextSize")
         val result = inferenceEngine.loadModel(request)
         if (result.isSuccess) {
             sessionA = result.getOrNull()
@@ -50,16 +60,29 @@ class DualModelManager(
         return result
     }
 
-    suspend fun loadModelB(modelPath: String, contextSize: Int = 2048): Result<ModelSession> {
+    suspend fun loadModelB(
+        modelPath: String,
+        contextSize: Int = 2048,
+        gpuLayers: Int = 0
+    ): Result<ModelSession> {
         val availRam = getAvailableRAM()
         if (availRam < MIN_RAM_FOR_DUAL_BYTES) {
-            val err = IllegalStateException("Insufficient RAM for Dual Mode. Available: ${availRam / 1024 / 1024}MB. Required: ${MIN_RAM_FOR_DUAL_BYTES / 1024 / 1024}MB.")
+            val err = IllegalStateException(
+                "Insufficient RAM for Dual Mode. Available: ${availRam / 1024 / 1024}MB. " +
+                    "Required: ${MIN_RAM_FOR_DUAL_BYTES / 1024 / 1024}MB."
+            )
             Log.e(TAG, err.message!!)
             return Result.failure(err)
         }
 
         val threads = calculateThreads()
-        val request = ModelLoadRequest(modelPath, contextSize, threads)
+        val request = ModelLoadRequest(
+            modelPath = modelPath,
+            contextSize = contextSize,
+            threadCount = threads,
+            gpuLayers = gpuLayers
+        )
+        Log.i(TAG, "loadModelB: gpuLayers=$gpuLayers contextSize=$contextSize")
         val result = inferenceEngine.loadModel(request)
         if (result.isSuccess) {
             sessionB = result.getOrNull()

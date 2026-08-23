@@ -30,7 +30,7 @@ class LlamaEngineNative : LlamaInferenceEngine {
     }
 
     private external fun nativeInit(): Boolean
-    private external fun nativeLoadModel(modelPath: String, contextSize: Int, threads: Int): String
+    private external fun nativeLoadModel(modelPath: String, contextSize: Int, threads: Int, gpuLayers: Int): String
     private external fun nativeUnloadModel(sessionId: String): Boolean
     private external fun nativeGenerateToken(sessionId: String, prompt: String, isFirstToken: Boolean): String
     external fun nativeGetAvailableRAM(): Long
@@ -54,9 +54,18 @@ class LlamaEngineNative : LlamaInferenceEngine {
         }
 
         return try {
-            Log.i(TAG, "Loading GGUF model: path=${request.modelPath}, ctxSize=${request.contextSize}, threads=${request.threadCount}")
+            Log.i(
+                TAG,
+                "Loading GGUF model: path=${request.modelPath}, ctxSize=${request.contextSize}, " +
+                    "threads=${request.threadCount}, gpuLayers=${request.gpuLayers}"
+            )
             val startTime = System.currentTimeMillis()
-            val sessionId = nativeLoadModel(request.modelPath, request.contextSize, request.threadCount)
+            val sessionId = nativeLoadModel(
+                request.modelPath,
+                request.contextSize,
+                request.threadCount,
+                request.gpuLayers
+            )
             val loadDuration = System.currentTimeMillis() - startTime
 
             if (sessionId.isBlank()) {
@@ -69,11 +78,16 @@ class LlamaEngineNative : LlamaInferenceEngine {
                 sessionId = sessionId,
                 modelPath = request.modelPath,
                 contextSize = request.contextSize,
-                loadedAt = System.currentTimeMillis()
+                loadedAt = System.currentTimeMillis(),
+                gpuLayers = request.gpuLayers
             )
             activeSessions[sessionId] = session
             cancelFlags[sessionId] = AtomicBoolean(false)
-            Log.i(TAG, "Model loaded successfully: sessionID=$sessionId, loadTime=${loadDuration}ms")
+            Log.i(
+                TAG,
+                "Model loaded successfully: sessionID=$sessionId, loadTime=${loadDuration}ms, " +
+                    "gpuLayers=${request.gpuLayers} (needs Vulkan-built .so for GPU speedup)"
+            )
             Result.success(session)
         } catch (e: Exception) {
             Log.e(TAG, "loadModel exception: ${e.message}", e)
@@ -112,7 +126,6 @@ class LlamaEngineNative : LlamaInferenceEngine {
 
         require(request.prompt.isNotBlank()) { "Completion prompt cannot be blank" }
 
-        // Reset cancel flag for this generation
         val flag = cancelFlags.getOrPut(session.sessionId) { AtomicBoolean(false) }
         flag.set(false)
 
@@ -126,14 +139,12 @@ class LlamaEngineNative : LlamaInferenceEngine {
             val accumulated = StringBuilder()
 
             while (!isComplete) {
-                // Honor user / auto stop
                 if (flag.get()) {
                     Log.i(TAG, "streamCompletion cancelled via cancel flag for session ${session.sessionId}")
                     emit(TokenEvent.Cancelled)
                     return@flow
                 }
 
-                // Fix: Only pass prompt on first token to avoid JNI string overhead
                 val promptArg = if (isFirst) request.prompt else ""
                 val isFirstCall = isFirst
                 val token = nativeGenerateToken(session.sessionId, promptArg, isFirst)
@@ -198,7 +209,6 @@ class LlamaEngineNative : LlamaInferenceEngine {
     override suspend fun cancel(sessionId: String) {
         Log.i(TAG, "Cancellation requested for session: $sessionId")
         cancelFlags[sessionId]?.set(true)
-        // Also mark all sessions if id not found (defensive for dual-mode)
         if (!cancelFlags.containsKey(sessionId)) {
             cancelFlags.values.forEach { it.set(true) }
         }

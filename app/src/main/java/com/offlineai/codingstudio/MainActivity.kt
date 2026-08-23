@@ -145,18 +145,22 @@ fun AppShell(
 
     LaunchedEffect(selectedModelA, currentSettings) {
         selectedModelA?.let { model ->
+            val layers = if (currentSettings.useGpu) currentSettings.gpuLayers else 0
             dualModelManager.loadModelA(
                 modelPath = model.path,
-                contextSize = currentSettings.contextSize
+                contextSize = currentSettings.contextSize,
+                gpuLayers = layers
             )
         }
     }
 
     LaunchedEffect(selectedModelB, currentSettings) {
         selectedModelB?.let { model ->
+            val layers = if (currentSettings.useGpu) currentSettings.gpuLayers else 0
             dualModelManager.loadModelB(
                 modelPath = model.path,
-                contextSize = currentSettings.contextSize
+                contextSize = currentSettings.contextSize,
+                gpuLayers = layers
             )
         }
     }
@@ -213,7 +217,6 @@ fun AppShell(
                         }
                     },
                     actions = {
-                        // OS monogram badge — matches web rail logo
                         Surface(
                             color = colorScheme.surfaceVariant,
                             shape = RoundedCornerShape(6.dp),
