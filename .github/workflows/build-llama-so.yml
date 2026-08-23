@@ -14,7 +14,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install Vulkan / glslang deps
+      - name: Install Vulkan / glslang deps & SPIRV-Headers
         run: |
           sudo apt-get update
           sudo apt-get install -y \
@@ -23,6 +23,9 @@ jobs:
             libvulkan-dev \
             vulkan-tools \
             cmake ninja-build
+          git clone --depth 1 https://github.com/KhronosGroup/SPIRV-Headers.git
+          cmake -B SPIRV-Headers/build -S SPIRV-Headers -DCMAKE_INSTALL_PREFIX=/usr/local
+          sudo cmake --install SPIRV-Headers/build
 
       - name: Setup Android NDK Environment
         run: |
