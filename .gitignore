@@ -24,3 +24,6 @@ dist/
 .externalNativeBuild
 .cxx
 captures/
+
+# Local llama.cpp checkout
+llama.cpp/

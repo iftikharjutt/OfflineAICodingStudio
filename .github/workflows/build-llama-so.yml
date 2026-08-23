@@ -3,6 +3,7 @@ name: Build llama_engine.so (arm64 + Vulkan GPU)
 on:
   workflow_dispatch:
   push:
+    branches: [ "main" ]
     paths:
       - 'ai/runtime/src/main/cpp/**'
       - '.github/workflows/build-llama-so.yml'
@@ -17,10 +18,26 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y \
+            glslc \
             glslang-tools \
             libvulkan-dev \
             vulkan-tools \
             cmake ninja-build
+
+      - name: Setup Android NDK Environment
+        run: |
+          if [ -z "$ANDROID_NDK_HOME" ]; then
+            if [ -n "$ANDROID_NDK_LATEST_HOME" ]; then
+              echo "ANDROID_NDK_HOME=$ANDROID_NDK_LATEST_HOME" >> $GITHUB_ENV
+              echo "$ANDROID_NDK_LATEST_HOME/shader-tools/linux-x86_64" >> $GITHUB_PATH
+            else
+              NDK_PATH=$(find /usr/local/lib/android/sdk/ndk -maxdepth 1 -mindepth 1 2>/dev/null | sort -V | tail -n 1)
+              echo "ANDROID_NDK_HOME=$NDK_PATH" >> $GITHUB_ENV
+              echo "$NDK_PATH/shader-tools/linux-x86_64" >> $GITHUB_PATH
+            fi
+          else
+            echo "$ANDROID_NDK_HOME/shader-tools/linux-x86_64" >> $GITHUB_PATH
+          fi
 
       - name: Checkout llama.cpp
         uses: actions/checkout@v4
@@ -31,7 +48,6 @@ jobs:
       - name: Build llama.cpp static libs for Android arm64-v8a (Vulkan)
         run: |
           cd llama.cpp
-          # Prefer Vulkan GPU offload; fall back note if NDK Vulkan is incomplete
           cmake -B build-android \
             -DCMAKE_TOOLCHAIN_FILE=$ANDROID_NDK_HOME/build/cmake/android.toolchain.cmake \
             -DANDROID_ABI=arm64-v8a \
@@ -56,6 +72,8 @@ jobs:
             -llog -lm -ldl -lvulkan \
             -o libllama_engine.so
           ls -lh libllama_engine.so
+          mkdir -p ai/runtime/src/main/jniLibs/arm64-v8a
+          cp libllama_engine.so ai/runtime/src/main/jniLibs/arm64-v8a/
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
