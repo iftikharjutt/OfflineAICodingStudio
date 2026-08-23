@@ -24,8 +24,8 @@ jobs:
             vulkan-tools \
             cmake ninja-build
           git clone --depth 1 https://github.com/KhronosGroup/SPIRV-Headers.git
-          cmake -B SPIRV-Headers/build -S SPIRV-Headers -DCMAKE_INSTALL_PREFIX=/usr/local
-          sudo cmake --install SPIRV-Headers/build
+          cmake -B SPIRV-Headers/build -S SPIRV-Headers -DCMAKE_INSTALL_PREFIX=$GITHUB_WORKSPACE/spirv-headers-install
+          cmake --install SPIRV-Headers/build
 
       - name: Setup Android NDK Environment
         run: |
@@ -60,7 +60,10 @@ jobs:
             -DGGML_NATIVE=OFF \
             -DGGML_OPENMP=OFF \
             -DGGML_VULKAN=ON \
-            -DGGML_LLAMAFILE=OFF
+            -DGGML_LLAMAFILE=OFF \
+            -DCMAKE_FIND_ROOT_PATH_MODE_PACKAGE=BOTH \
+            -DCMAKE_PREFIX_PATH=$GITHUB_WORKSPACE/spirv-headers-install \
+            -DSPIRV-Headers_DIR=$GITHUB_WORKSPACE/spirv-headers-install/share/cmake/SPIRV-Headers
           cmake --build build-android --config Release -j$(nproc) --target llama
 
       - name: Build JNI bridge -> libllama_engine.so
